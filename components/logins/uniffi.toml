@@ -1,6 +1,6 @@
 [bindings.kotlin]
 package_name = "mozilla.appservices.logins"
-cdylib_name = "megazord"
+cdylib_name = "xul"
 
 [bindings.swift]
 ffi_module_name = "MozillaRustComponents"

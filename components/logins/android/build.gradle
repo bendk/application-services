@@ -13,6 +13,7 @@ dependencies {
     // Part of the public API.
     api project(':sync15')
 
+    // implementation "org.mozilla.appservices:logins-native:86.0.0"
     implementation "org.mozilla.components:service-glean:$android_components_version"
 
     testImplementation "androidx.test:core-ktx:$androidx_test_core_version"
@@ -21,5 +22,4 @@ dependencies {
 }
 
 ext.configureUniFFIBindgen("../src/logins.udl")
-ext.dependsOnTheMegazord()
 ext.configurePublish()

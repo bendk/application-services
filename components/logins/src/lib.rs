@@ -48,3 +48,6 @@ fn decrypt_fields(sec_fields: String, enc_key: &str) -> Result<SecureLoginFields
     let encdec = encryption::EncryptorDecryptor::new(enc_key)?;
     encdec.decrypt_struct(&sec_fields)
 }
+
+#[no_mangle]
+pub extern "C" fn dummy_function() { }
