@@ -124,7 +124,9 @@ impl FirefoxAccount {
     /// Restore a `FirefoxAccount` instance from a serialized state
     /// created using `to_json`.
     pub fn from_json(data: &str) -> Result<Self> {
-        let state = state_persistence::state_from_json(data)?;
+        let mut state = state_persistence::state_from_json(data)?;
+        state.access_token_cache.clear();
+        state.scoped_keys.clear();
         Ok(Self::from_state(state))
     }
 
