@@ -273,6 +273,9 @@ subprojects {
 // before invoking Gradle (or Cargo).
 ext.cargoExec = { spec, toolchain ->
     spec.environment("NSS_STATIC", "1")
+    println ""
+    println "Setting NSS_DIR: libs/${toolchain.folder}/nss"
+    println ""
     spec.environment("NSS_DIR",               new File(rootProject.ext.libsRootDir, "libs/${toolchain.folder}/nss").absolutePath)
 }
 // Strictly speaking, we could always specify `SQLCIPHER_LIB_DIR` and

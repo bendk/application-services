@@ -52,7 +52,7 @@ fn get_nss() -> Result<(PathBuf, PathBuf), NoNssDir> {
     let nss_dir = env("NSS_DIR").ok_or(NoNssDir)?;
     let nss_dir = Path::new(&nss_dir);
     if !nss_dir.exists() {
-        panic!("It looks like NSS is not built. Please run `libs/verify-[platform]-environment.sh` first!");
+        panic!("It looks like NSS is not built. Please run `libs/verify-[platform]-environment.sh` first! ({})", nss_dir.to_string_lossy());
     }
     let lib_dir = nss_dir.join("lib");
     let include_dir = nss_dir.join("include");
