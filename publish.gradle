@@ -275,13 +275,18 @@ ext.dependsOnTheMegazord = {
     evaluationDependsOn(":full-megazord")
     afterEvaluate {
         android.libraryVariants.all { variant ->
+
             def productFlavor = ""
             variant.productFlavors.each {
                 productFlavor += "${it.name.capitalize()}"
             }
             def buildType = "${variant.buildType.name.capitalize()}"
             def nativeCargoBuildTask = "cargoBuild${rootProject.ext.nativeRustTarget.capitalize()}"
-            tasks["process${productFlavor}${buildType}UnitTestJavaRes"].dependsOn(project(':full-megazord').tasks[nativeCargoBuildTask])
+            def taskKey = "process${productFlavor}${buildType}UnitTestJavaRes"
+            // The task can be missing when the `rust.targets` property is present and the target is missing from it
+            if (tasks.containsKey(taskKey)) {
+                tasks[taskKey].dependsOn(project(':full-megazord').tasks[nativeCargoBuildTask])
+            }
         }
     }
 }
