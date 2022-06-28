@@ -2,21 +2,173 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use error_support::report_error;
 use std::ffi::OsString;
 
 pub type Result<T> = std::result::Result<T, LoginsError>;
-pub type APIResult<T> = std::result::Result<T, LoginsStorageError>;
 
-/// Internal logins error type, this is what we use for inside this crate
+// ------------
+// Imagine these being in our error_support crate
+#[macro_use]
+pub mod error_crate {
+
+    /// Describes what error reporting action should be taken.
+    pub enum ErrorReporting {
+        // No logging or error reporting.
+        Nothing,
+        // We write a log message but don't report it.
+        Log {
+            level: log::Level,
+        },
+        // We log a message and report via our error reporter.
+        Report {
+            level: log::Level,
+            report_class: String,
+        },
+    }
+
+    // Specifies how an "internal" error is converted to an "external" public error and
+    // any logging or reporting that should happen.
+    pub struct ErrorHandling<E> {
+        // The external error that should be returned.
+        pub err: E,
+        // How the error should be reported.
+        pub reporting: ErrorReporting,
+    }
+
+    pub trait GetErrorHandling {
+        type ExternalError;
+
+        // Return how to handle our internal errors
+        fn get_error_handling(&self) -> ErrorHandling<Self::ExternalError>;
+
+        // Some helpers to cut the verbosity down.
+        // Just convert the error without any special logging or error reporting.
+        fn passthrough(err: Self::ExternalError) -> ErrorHandling<Self::ExternalError> {
+            ErrorHandling {
+                err,
+                reporting: ErrorReporting::Nothing,
+            }
+        }
+
+        // Just convert and log the error without any special error reporting.
+        fn log(err: Self::ExternalError, level: log::Level) -> ErrorHandling<Self::ExternalError> {
+            ErrorHandling {
+                err,
+                reporting: ErrorReporting::Log { level },
+            }
+        }
+
+        // Convert, report and log the error.
+        fn report(
+            err: Self::ExternalError,
+            level: log::Level,
+            report_class: String,
+        ) -> ErrorHandling<Self::ExternalError> {
+            ErrorHandling {
+                err,
+                reporting: ErrorReporting::Report {
+                    level,
+                    report_class,
+                },
+            }
+        }
+
+        // Convert, report and log the error in a way suitable for "unexpected" errors.
+        // (With more generics we might be able to abstract away the creation of `err`,
+        // but that will have a significant complexity cost for only marginal value)
+        fn unexpected(
+            err: Self::ExternalError,
+            report_class: Option<&str>,
+        ) -> ErrorHandling<Self::ExternalError> {
+            Self::report(
+                err,
+                log::Level::Error,
+                report_class.unwrap_or("unexpected").to_string(),
+            )
+        }
+    }
+
+    // Handle the specified "internal" error, taking any logging or error
+    // reporting actions and converting the error to the public error.
+    // Called by our `handle_error` macro.
+    pub fn convert_log_report_error<IE, EE>(e: IE) -> EE
+    where
+        IE: GetErrorHandling<ExternalError = EE> + std::error::Error,
+        EE: std::error::Error,
+    {
+        let handling = e.get_error_handling();
+        match handling.reporting {
+            ErrorReporting::Nothing => {}
+            ErrorReporting::Log { level } => {
+                log::log!(level, "{}", e.to_string());
+            }
+            ErrorReporting::Report {
+                report_class,
+                level,
+            } => {
+                log::log!(level, "{}", e.to_string());
+                // notify the error reporter.
+                error_support::report_error(report_class, format!("{:?}", e));
+            }
+        }
+        handling.err
+    }
+
+    /// Function wrapper macro to convert from our internal errors to external errors
+    /// and optionally log and report the error.
+    macro_rules! handle_error {
+        { $($tt:tt)* } => {
+            let body = || {
+                $($tt)*
+            };
+            let result: Result<_> = body();
+            match result {
+                Ok(r) => Ok(r),
+                Err(e) => Err(error_crate::convert_log_report_error(e))
+            }
+        }
+    }
+}
+
+// --- logins stuff.
+
+// Functions which are part of the public API should use this Result.
+pub type ApiResult<T> = std::result::Result<T, LoginsStorageError>;
+
+// Errors we return via the public interface.
+//
+// Named `LoginsStorageError` for backwards compatibility reasons, although
+// this name shouldn't need to be used anywhere other than this file and the .udl
+//
+// Note that there is no `Into` between public and internal errors, but
+// instead the `ErrorHandling` mechanisms are used to explicitly convert
+// when necessary.
+//
+// XXX - not clear that these actually need to use `thiserror`? Certainly
+// not necessary to use `#[from]` though.
+#[derive(Debug, thiserror::Error)]
+pub enum LoginsStorageError {
+    #[error("Invalid login: {0}")]
+    InvalidRecord(String),
+
+    #[error("No record with guid exists (when one was required): {0:?}")]
+    NoSuchRecord(String),
+
+    #[error("Encryption key is in the correct format, but is not the correct key.")]
+    IncorrectKey,
+
+    #[error("{0}")]
+    Interrupted(String),
+
+    #[error("Unexpected Error: {0}")]
+    UnexpectedLoginsStorageError(String),
+}
+
+/// Logins error type
+/// These are "internal" errors used by the implementation. This error type
+/// is never returned to the consumer.
 #[derive(Debug, thiserror::Error)]
 pub enum LoginsError {
-    // WARNING: The #[error] attributes define the string representation of the error (see
-    // thiserror for details).  These strings should not contain any personally identifying
-    // information.  We operate on a best-effort basis, since we can't be completely sure that
-    // our dependencies don't leak PII in their error strings.  For example, `rusqlite::Error`
-    // could include data from a user's database in their errors, but we've never seen that in
-    // practice so we are comfortable forwading that error message in ours.
     #[error("Invalid login: {0}")]
     InvalidLogin(#[from] InvalidLogin),
 
@@ -39,9 +191,6 @@ pub enum LoginsError {
     #[error("Error parsing JSON data: {0}")]
     JsonError(#[from] serde_json::Error),
 
-    #[error("Invalid encryption key")]
-    InvalidKey,
-
     #[error("Error executing SQL: {0}")]
     SqlError(#[from] rusqlite::Error),
 
@@ -53,6 +202,9 @@ pub enum LoginsError {
 
     #[error("Invalid database file: {0}")]
     InvalidDatabaseFile(String),
+
+    #[error("Invalid encryption key")]
+    InvalidKey,
 
     #[error("Crypto Error: {0}")]
     CryptoError(#[from] jwcrypto::JwCryptoError),
@@ -85,182 +237,54 @@ pub enum InvalidLogin {
     IllegalFieldValue { field_info: String },
 }
 
-/// Public logins error type, we convert from `LoginsError` to `LoginsStorageError` in the
-/// top-level functions that we expose via UniFFI.
-///
-/// `LoginsStorageError` only contains variants that are useful to the consuming app, for example:
-///    - `InvalidLogin` is useful, because the app can inform the user that the login they entered
-///      was invalid.
-///    - `Interrupted` is useful because the app can choose to ignore these errors.
-///    - `BadSyncStatus` is not useful to the app so it gets grouped into the
-///      UnexpectedLoginsError.
-#[derive(Debug, thiserror::Error)]
-pub enum LoginsStorageError {
-    // This is thrown on attempts to insert or update a record so that it
-    // is no longer valid. See [InvalidLoginReason] for a list of reasons
-    // a record may be considered invalid
-    #[error("Invalid login: {0}")]
-    InvalidRecord(InvalidLogin),
+// Define how our internal errors are handled and converted to external errors.
+use error_crate::{ErrorHandling, GetErrorHandling};
 
-    /// This is thrown if `update()` is performed with a record whose ID
-    /// does not exist.
-    #[error("No record with guid exists (when one was required): {0}")]
-    NoSuchRecord(String),
+impl GetErrorHandling for LoginsError {
+    type ExternalError = LoginsStorageError;
 
-    /// Error encrypting/decrypting logins data
-    #[error("Encryption error: {0}")]
-    CryptoError(String),
-
-    /// This indicates that the sync authentication is invalid, likely due to having
-    /// expired.
-    #[error("SyncAuthInvalid error: {0}")]
-    SyncAuthInvalid(String),
-
-    /// This error is emitted if a request to a sync server failed.
-    ///
-    /// Once iOS is using the sync manager, we can probably kill this.  Since the sync manager will
-    /// then be handling the error.
-    #[error("RequestFailed error: {0}")]
-    RequestFailed(String),
-
-    /// Operation was interrupted by the user
-    #[error("Operation interrupted: {0}")]
-    Interrupted(String),
-
-    /// Catch-all for all other errors
-    #[error("Unexpected error: {0}")]
-    UnexpectedLoginsError(String),
-}
-
-impl From<LoginsError> for LoginsStorageError {
-    fn from(error: LoginsError) -> LoginsStorageError {
-        // We convert errors before sending them across the API boundary to the consuming
-        // application, so this is a good time to report them.
-        error.report();
-
-        match error {
-            LoginsError::InvalidLogin(inner) => Self::InvalidRecord(inner),
-            LoginsError::NoSuchRecord(guid) => Self::NoSuchRecord(guid),
-            LoginsError::CryptoError(inner) => Self::CryptoError(inner.to_string()),
-            LoginsError::InvalidKey => Self::CryptoError("InvalidKey".to_string()),
-            LoginsError::SyncAdapterError(ref e) => match e.kind() {
-                sync15::ErrorKind::TokenserverHttpError(401)
-                | sync15::ErrorKind::BadKeyLength(..) => Self::SyncAuthInvalid(error.to_string()),
-                sync15::ErrorKind::RequestError(_) => Self::RequestFailed(error.to_string()),
-                _ => Self::UnexpectedLoginsError(error.to_string()),
-            },
-            _ => Self::UnexpectedLoginsError(error.to_string()),
-        }
-    }
-}
-
-/// These are needed for the LoginsStore::sync() method.  Once iOS has moved to `SyncManager` they
-/// can be deleted alongside that method
-impl From<sync15::Error> for LoginsStorageError {
-    fn from(error: sync15::Error) -> LoginsStorageError {
-        LoginsError::from(error).into()
-    }
-}
-impl From<url::ParseError> for LoginsStorageError {
-    fn from(error: url::ParseError) -> LoginsStorageError {
-        LoginsError::from(error).into()
-    }
-}
-
-/// Needed for support the JSON serialization of import_multiple().  Maybe this can be refactored
-/// to avoid this
-impl From<serde_json::Error> for LoginsStorageError {
-    fn from(error: serde_json::Error) -> LoginsStorageError {
-        LoginsError::from(error).into()
-    }
-}
-
-/// Classify errors into different categories
-#[derive(Clone, Debug)]
-pub enum ErrorClassification {
-    /// Errors that we expect to happen regularly, like network errors or DB corruption errors.
-    /// Our strategy for these errors is to eventually report them to telemetry and ensure that the
-    /// counts remain relatively stable. The string value will be used to group errors when
-    /// counting.
-    Expected(String),
-    /// Errors that we don't expect to see.  Our strategy for these errors is to report them to a
-    /// Sentry-like reporting system and investigate them when they come up.  The string value will
-    /// be used to group errors in the reporting system.
-    Unexpected(String),
-}
-
-impl LoginsError {
-    // Get a short textual label identifying the type of error that occurred, but without specific
-    // data like GUIDs, SQLite error messages, etc.  This is used to group the errors in Sentry and
-    // telemetry.
-    pub fn classify(&self) -> ErrorClassification {
-        // Convenience functions to create ErrorClassification instances
-        fn unexpected(grouping: impl Into<String>) -> ErrorClassification {
-            ErrorClassification::Unexpected(grouping.into())
-        }
-        fn expected(grouping: impl Into<String>) -> ErrorClassification {
-            ErrorClassification::Expected(grouping.into())
-        }
-
+    // Return how to handle our internal errors
+    fn get_error_handling(&self) -> ErrorHandling<Self::ExternalError> {
+        // WARNING: The details inside the `LoginsStorageError` we return should not
+        // contain any personally identifying information.
+        // However, because many of the string details come from the underlying
+        // internal error, we operate on a best-effort basis, since we can't be
+        // completely sure that our dependencies don't leak PII in their error
+        // strings.  For example, `rusqlite::Error` could include data from a
+        // user's database in their errors, which would then cause it to appear
+        // in our `LoginsStorageError::Unexpected` structs, log messages, etc.
+        // But because we've never seen that in practice we are comfortable
+        // forwarding that error message into ours without attempting to sanitize.
         match self {
-            // TODO: The legacy code called `log::error` for these, but should we be doing that?
-            // Let's decide once these are properly grouped in sentry.
-            Self::SyncAdapterError(_) => unexpected("SyncError"),
-            Self::NoSuchRecord(_) => unexpected("NoSuchRecord"),
-            Self::CryptoError(_) => unexpected("CryptoError"),
-            // Expected errors
-            Self::InvalidKey => expected("InvalidKey"),
-            Self::InvalidLogin(desc) => match desc {
-                InvalidLogin::EmptyOrigin => expected("InvalidLogin::EmptyOrigin"),
-                InvalidLogin::EmptyPassword => expected("InvalidLogin::EmptyPassword"),
-                InvalidLogin::DuplicateLogin => expected("InvalidLogin::DuplicateLogin"),
-                InvalidLogin::BothTargets => expected("InvalidLogin::BothTargets"),
-                InvalidLogin::NoTarget => expected("InvalidLogin::NoTarget"),
-                InvalidLogin::IllegalFieldValue { .. } => {
-                    expected("InvalidLogin::IllegalFieldValue")
-                }
-            },
-            Self::SqlError(rusqlite::Error::SqliteFailure(err, _))
-                if err.code == rusqlite::ErrorCode::NotADatabase =>
-            {
-                // TODO: investigate if this still happens now that we're not using sqlcipher
-                unexpected("NotADatabase")
+            Self::InvalidLogin(why) => {
+                Self::passthrough(LoginsStorageError::InvalidRecord(why.to_string()))
             }
-            Self::SqlError(rusqlite::Error::SqliteFailure(err, _))
-                if err.code == rusqlite::ErrorCode::OperationInterrupted =>
-            {
-                expected("Interrupted")
+            // Our internal "no such record" error is converted to our public "no such record" error, with no logging and no error reporting.
+            Self::NoSuchRecord(guid) => {
+                Self::passthrough(LoginsStorageError::NoSuchRecord(guid.to_string()))
             }
-            Self::Interrupted(_) => expected("Interrupted"),
-            // TODO: the legacy code grouped all other errors together and called `log::error` for
-            // them.  We should go through these errors in Sentry and properly classify them.
-            _ => unexpected("UnexpectedError"),
-        }
-    }
-
-    pub fn group_name(&self) -> String {
-        match self.classify() {
-            ErrorClassification::Unexpected(group_name)
-            | ErrorClassification::Expected(group_name) => group_name,
-        }
-    }
-
-    /// Report this error to our tracking system if appropriate
-    pub fn report(&self) {
-        let error_string = self.to_string();
-        match self.classify() {
-            ErrorClassification::Unexpected(group_name) => {
-                // TODO: this should be `log::error`, but that's hooked up the legacy sentry
-                // reporting code so that would result in reporting the error twice.  Once the
-                // legacy code is reported by `report_error!`, this should get changed to
-                // `log::error`
-                log::warn!("{}", error_string);
-                report_error!(group_name, "{}", error_string);
+            // NonEmptyTable error is just a sanity check to ensure we aren't asked to migrate into an
+            // existing DB - consumers should never actually do this, and will never expect to handle this as a specific
+            // error - so it gets reported to the error reporter and converted to an "internal" error.
+            Self::NonEmptyTable => Self::unexpected(
+                LoginsStorageError::UnexpectedLoginsStorageError(
+                    "must be an empty DB to migrate".to_string(),
+                ),
+                Some("migration"),
+            ),
+            Self::CryptoError(_) => Self::log(LoginsStorageError::IncorrectKey, log::Level::Warn),
+            Self::Interrupted(_) => {
+                Self::passthrough(LoginsStorageError::Interrupted(self.to_string()))
             }
-            ErrorClassification::Expected(_) => {
-                log::warn!("{}", error_string);
-                // TODO: report these to telemetry
-            }
+            // This list is partial - not clear if a best-practice should be to ask that every
+            // internal error is listed here (and remove this default branch) to ensure every error
+            // is considered, or whether this default is fine for obscure errors?
+            // But it's fine for now because errors were always converted with a default
+            // branch to "unexpected"
+            _ => Self::unexpected(
+                LoginsStorageError::UnexpectedLoginsStorageError(self.to_string()),
+                None,
+            ),
         }
     }
 }

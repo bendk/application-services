@@ -89,16 +89,28 @@ dictionary EncryptedLogin {
     string sec_fields; // ciphertext of a SecureLoginFields
 };
 
+// These are the errors returned by our public API.
 [Error]
 enum LoginsStorageError {
+    // The login data supplied is invalid. The message will indicate what's wrong with it.
     "InvalidRecord",
+
+    // Asking to do something with a guid which doesn't exist.
     "NoSuchRecord",
-    "CryptoError",
-    "SyncAuthInvalid",
-    "RequestFailed",
+
+    // The encryption key supplied of the correct format, but not the correct key.
+    "IncorrectKey",
+
+    // An operation was interrupted at the request of the consuming app.
     "Interrupted",
-    "UnexpectedLoginsError",
+
+    // something internal went wrong which doesn't have a public error value
+    // because the consuming app can not reasonably take any action to resolve it.
+    // The underlying error will have been logged and reported.
+    // (ideally would just be `Unexpected`, but that would be a breaking change)
+    "UnexpectedLoginsStorageError",
 };
+
 
 interface LoginStore {
     [Throws=LoginsStorageError]
