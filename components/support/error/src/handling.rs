@@ -26,37 +26,27 @@ pub struct ErrorHandling<E> {
     pub reporting: ErrorReporting,
 }
 
-/// A trait to define how errors are converted and reported.
-pub trait GetErrorHandling {
-    type ExternalError;
-
-    /// Return how to handle our internal errors
-    fn get_error_handling(&self) -> ErrorHandling<Self::ExternalError>;
-
+impl<E> ErrorHandling<E> {
     // Some helpers to cut the verbosity down.
     /// Just convert the error without any special logging or error reporting.
-    fn passthrough(err: Self::ExternalError) -> ErrorHandling<Self::ExternalError> {
-        ErrorHandling {
+    pub fn passthrough(err: E) -> Self {
+        Self {
             err,
             reporting: ErrorReporting::Nothing,
         }
     }
 
     /// Just convert and log the error without any special error reporting.
-    fn log(err: Self::ExternalError, level: log::Level) -> ErrorHandling<Self::ExternalError> {
-        ErrorHandling {
+    pub fn log(err: E, level: log::Level) -> Self {
+        Self {
             err,
             reporting: ErrorReporting::Log { level },
         }
     }
 
     /// Convert, report and log the error.
-    fn report(
-        err: Self::ExternalError,
-        level: log::Level,
-        report_class: String,
-    ) -> ErrorHandling<Self::ExternalError> {
-        ErrorHandling {
+    pub fn report(err: E, level: log::Level, report_class: String) -> Self {
+        Self {
             err,
             reporting: ErrorReporting::Report {
                 level,
@@ -68,16 +58,21 @@ pub trait GetErrorHandling {
     /// Convert, report and log the error in a way suitable for "unexpected" errors.
     // (With more generics we might be able to abstract away the creation of `err`,
     // but that will have a significant complexity cost for only marginal value)
-    fn unexpected(
-        err: Self::ExternalError,
-        report_class: Option<&str>,
-    ) -> ErrorHandling<Self::ExternalError> {
+    pub fn unexpected(err: E, report_class: Option<&str>) -> Self {
         Self::report(
             err,
             log::Level::Error,
             report_class.unwrap_or("unexpected").to_string(),
         )
     }
+}
+
+/// A trait to define how errors are converted and reported.
+pub trait GetErrorHandling {
+    type ExternalError;
+
+    /// Return how to handle our internal errors
+    fn get_error_handling(&self) -> ErrorHandling<Self::ExternalError>;
 }
 
 /// Handle the specified "internal" error, taking any logging or error
