@@ -5,16 +5,12 @@
 //! Helpers for components to "handle" errors.
 
 /// Describes what error reporting action should be taken.
-pub enum ErrorReporting {
-    /// No logging or error reporting.
-    Nothing,
-    /// We write a log message but don't report it.
-    Log { level: log::Level },
-    /// We log a message and report via our error reporter.
-    Report {
-        level: log::Level,
-        report_class: String,
-    },
+#[derive(Debug, Default)]
+pub struct ErrorReporting {
+    /// If Some(level), will write a log message at that level.
+    log_level: Option<log::Level>,
+    /// If Some(report_class) will call the error reporter with details.
+    report_class: Option<String>,
 }
 
 /// Specifies how an "internal" error is converted to an "external" public error and
@@ -32,7 +28,7 @@ impl<E> ErrorHandling<E> {
     pub fn passthrough(err: E) -> Self {
         Self {
             err,
-            reporting: ErrorReporting::Nothing,
+            reporting: ErrorReporting::default(),
         }
     }
 
@@ -40,7 +36,10 @@ impl<E> ErrorHandling<E> {
     pub fn log(err: E, level: log::Level) -> Self {
         Self {
             err,
-            reporting: ErrorReporting::Log { level },
+            reporting: ErrorReporting {
+                log_level: Some(level),
+                ..Default::default()
+            },
         }
     }
 
@@ -48,9 +47,9 @@ impl<E> ErrorHandling<E> {
     pub fn report(err: E, level: log::Level, report_class: String) -> Self {
         Self {
             err,
-            reporting: ErrorReporting::Report {
-                level,
-                report_class,
+            reporting: ErrorReporting {
+                log_level: Some(level),
+                report_class: Some(report_class),
             },
         }
     }
@@ -84,26 +83,19 @@ where
     EE: std::error::Error,
 {
     let handling = e.get_error_handling();
-    match handling.reporting {
-        ErrorReporting::Nothing => {}
-        ErrorReporting::Log { level } => {
-            log::log!(level, "{}", e.to_string());
-        }
-        ErrorReporting::Report {
-            // avoid unused var warning when the "reporting" feature isn't enabled.
-            report_class,
-            level,
-        } => {
-            log::log!(level, "{}", e.to_string());
-            // notify the error reporter if the feature is enabled.
-            // XXX - should we arrange for the `report_class` to have the
-            // original crate calling this as a prefix, or will we still be
-            // able to identify that?
-            #[cfg(feature = "reporting")]
-            crate::report_error(report_class, e.to_string());
-            #[cfg(not(feature = "reporting"))]
-            let _ = report_class; // avoid clippy warning when feature's not enabled.
-        }
+    let reporting = handling.reporting;
+    if let Some(level) = reporting.log_level {
+        log::log!(level, "{}", e.to_string());
+    }
+    if let Some(report_class) = reporting.report_class {
+        // notify the error reporter if the feature is enabled.
+        // XXX - should we arrange for the `report_class` to have the
+        // original crate calling this as a prefix, or will we still be
+        // able to identify that?
+        #[cfg(feature = "reporting")]
+        crate::report_error(report_class, e.to_string());
+        #[cfg(not(feature = "reporting"))]
+        let _ = report_class; // avoid clippy warning when feature's not enabled.
     }
     handling.err
 }
