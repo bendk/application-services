@@ -9,6 +9,7 @@ pub type ApiResult<T> = std::result::Result<T, LoginsStorageError>;
 
 pub use error_support::handle_error;
 use error_support::{ErrorHandling, GetErrorHandling};
+use sync15::ErrorKind as Sync15ErrorKind;
 
 // Errors we return via the public interface.
 //
@@ -34,6 +35,14 @@ pub enum LoginsStorageError {
 
     #[error("{0}")]
     Interrupted(String),
+
+    #[error("SyncAuthInvalid error {0}")]
+    SyncAuthInvalid(String),
+
+    // This error is emitted if a request to a sync server failed.
+    /// We can probably kill this? The sync manager is what cares about this.
+    #[error("RequestFailed error: {0}")]
+    RequestFailed(String),
 
     #[error("Unexpected Error: {0}")]
     UnexpectedLoginsStorageError(String),
@@ -151,6 +160,22 @@ impl GetErrorHandling for LoginsError {
             Self::Interrupted(_) => {
                 ErrorHandling::passthrough(LoginsStorageError::Interrupted(self.to_string()))
             }
+            Self::SyncAdapterError(e) => match e.kind() {
+                Sync15ErrorKind::TokenserverHttpError(401) | Sync15ErrorKind::BadKeyLength(..) => {
+                    ErrorHandling::log(
+                        LoginsStorageError::SyncAuthInvalid(e.to_string()),
+                        log::Level::Warn,
+                    )
+                }
+                Sync15ErrorKind::RequestError(_) => ErrorHandling::log(
+                    LoginsStorageError::RequestFailed(e.to_string()),
+                    log::Level::Warn,
+                ),
+                _ => ErrorHandling::unexpected(
+                    LoginsStorageError::UnexpectedLoginsStorageError(self.to_string()),
+                    Some("sync"),
+                ),
+            },
             // This list is partial - not clear if a best-practice should be to ask that every
             // internal error is listed here (and remove this default branch) to ensure every error
             // is considered, or whether this default is fine for obscure errors?
