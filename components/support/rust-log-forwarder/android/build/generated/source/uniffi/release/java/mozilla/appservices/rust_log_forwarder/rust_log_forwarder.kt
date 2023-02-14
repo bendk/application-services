@@ -504,9 +504,9 @@ internal class ForeignCallbackTypeLogger : ForeignCallback {
                 // Call the method, write to outBuf and return a status code
                 // See docs of ForeignCallback in `uniffi/src/ffi/foreigncallbacks.rs` for info
                 try {
-                    val buffer = this.`invokeLog`(cb, args)
+                    this.`invokeLog`(cb, args)
                     // Success
-                    outBuf.setValue(buffer)
+                    //outBuf.setValue(buffer)
                     1
                 } catch (e: Throwable) {
                     // Unexpected error
@@ -535,12 +535,11 @@ internal class ForeignCallbackTypeLogger : ForeignCallback {
     }
 
     
-    private fun `invokeLog`(kotlinCallbackInterface: Logger, args: RustBuffer): RustBuffer.ByValue {
+    private fun `invokeLog`(kotlinCallbackInterface: Logger, args: RustBuffer): Unit {
             val buf = args.asByteBuffer() ?: throw InternalException("No ByteBuffer in RustBuffer; this is a Uniffi bug")
             return kotlinCallbackInterface.`log`(
                     FfiConverterTypeRecord.read(buf)
                     )
-            .let { RustBuffer.ByValue() }
                 // TODO catch errors and report them back to Rust.
                 // https://github.com/mozilla/uniffi-rs/issues/351
     }
