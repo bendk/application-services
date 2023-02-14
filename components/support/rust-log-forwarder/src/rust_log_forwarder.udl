@@ -9,6 +9,8 @@ namespace rust_log_forwarder {
     void set_logger(Logger? logger);
     // Set the maximum log level filter.  Records below this level will not be sent to the logger.
     void set_max_level(Level level);
+
+    void test_performance();
 };
 
 enum Level {

@@ -27,6 +27,28 @@ pub fn set_max_level(level: Level) {
     HAVE_SET_MAX_LEVEL.store(true, Ordering::Relaxed);
 }
 
+pub fn test_performance() {
+    use std::time::Instant;
+    // let's do some warmup
+    for _ in 0..1000 {
+        log::error!("TEST ERROR")
+    }
+
+    // run the test 3 times
+    let mut results = Vec::with_capacity(3);
+    for i in 0..3 {
+        println!("log performance iteration {i}");
+        let start = Instant::now();
+        for _ in 0..100_000 {
+            log::error!("TEST ERROR")
+        }
+        let elapsed = start.elapsed().as_millis();
+        results.push(elapsed);
+    }
+    results.sort();
+    println!("Results (min, median, max): {}ms {}ms {}ms", results[0], results[1], results[2]);
+}
+
 uniffi::include_scaffolding!("rust_log_forwarder");
 
 #[cfg(test)]
