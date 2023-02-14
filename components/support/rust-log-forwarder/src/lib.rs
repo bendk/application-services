@@ -49,7 +49,7 @@ pub fn test_performance() {
     println!("Results (min, median, max): {}ms {}ms {}ms", results[0], results[1], results[2]);
 }
 
-uniffi::include_scaffolding!("rust_log_forwarder");
+include!("rust_log_forwarder.uniffi.rs");
 
 #[cfg(test)]
 mod test {
