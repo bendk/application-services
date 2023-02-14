@@ -221,6 +221,13 @@ impl Drop for FfiConverterCallbackInterfaceLogger {
 
 uniffi::deps::static_assertions::assert_impl_all!(FfiConverterCallbackInterfaceLogger: Send);
 
+pub type ForeignCallback2 = unsafe extern "C" fn(
+    handle: u64,
+    method: u32,
+    args: *const uniffi::RustBuffer,
+    buf_ptr: *mut uniffi::RustBuffer,
+) -> std::ffi::c_int;
+
 impl r#Logger for FfiConverterCallbackInterfaceLogger {
     fn r#log(&self, r#record: r#Record) {
         let mut args_buf = Vec::new();
@@ -236,7 +243,8 @@ impl r#Logger for FfiConverterCallbackInterfaceLogger {
             // * We expect the callback to write into that a valid allocated instance of a
             //   RustBuffer.
             let mut ret_rbuf = uniffi::RustBuffer::new();
-            let ret = callback(self.handle, 1, args_rbuf, &mut ret_rbuf);
+            let callback2: ForeignCallback2 = std::mem::transmute(callback);
+            let ret = callback2(self.handle, 1, &args_rbuf, &mut ret_rbuf);
             #[allow(clippy::let_and_return, clippy::let_unit_value)]
             match ret {
                 1 => {

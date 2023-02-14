@@ -443,7 +443,7 @@ internal class ConcurrentHandleMap<T>(
 }
 
 interface ForeignCallback : com.sun.jna.Callback {
-    public fun invoke(handle: Handle, method: Int, args: RustBuffer.ByValue, outBuf: RustBufferByReference): Int
+    public fun invoke(handle: Handle, method: Int, args: RustBuffer, outBuf: RustBufferByReference): Int
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -491,7 +491,7 @@ public interface Logger {
 // The ForeignCallback that is passed to Rust.
 internal class ForeignCallbackTypeLogger : ForeignCallback {
     @Suppress("TooGenericExceptionCaught")
-    override fun invoke(handle: Handle, method: Int, args: RustBuffer.ByValue, outBuf: RustBufferByReference): Int {
+    override fun invoke(handle: Handle, method: Int, args: RustBuffer, outBuf: RustBufferByReference): Int {
         val cb = FfiConverterTypeLogger.lift(handle)
         return when (method) {
             IDX_CALLBACK_FREE -> {
@@ -535,20 +535,15 @@ internal class ForeignCallbackTypeLogger : ForeignCallback {
     }
 
     
-    private fun `invokeLog`(kotlinCallbackInterface: Logger, args: RustBuffer.ByValue): RustBuffer.ByValue =
-        try {
+    private fun `invokeLog`(kotlinCallbackInterface: Logger, args: RustBuffer): RustBuffer.ByValue {
             val buf = args.asByteBuffer() ?: throw InternalException("No ByteBuffer in RustBuffer; this is a Uniffi bug")
-            kotlinCallbackInterface.`log`(
+            return kotlinCallbackInterface.`log`(
                     FfiConverterTypeRecord.read(buf)
                     )
             .let { RustBuffer.ByValue() }
                 // TODO catch errors and report them back to Rust.
                 // https://github.com/mozilla/uniffi-rs/issues/351
-        } finally {
-            RustBuffer.free(args)
-        }
-
-    
+    }
 }
 
 // The ffiConverter which transforms the Callbacks in to Handles to pass to Rust.
