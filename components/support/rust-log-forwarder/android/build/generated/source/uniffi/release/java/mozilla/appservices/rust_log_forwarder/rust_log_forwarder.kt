@@ -443,7 +443,7 @@ internal class ConcurrentHandleMap<T>(
 }
 
 interface ForeignCallback : com.sun.jna.Callback {
-    public fun invoke(handle: Handle, method: Int, args: RustBuffer, outBuf: RustBufferByReference): Int
+    public fun invoke(handle: Handle, method: Int, argData: Pointer, argLen: Int, outBuf: RustBufferByReference): Int
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -491,7 +491,7 @@ public interface Logger {
 // The ForeignCallback that is passed to Rust.
 internal class ForeignCallbackTypeLogger : ForeignCallback {
     @Suppress("TooGenericExceptionCaught")
-    override fun invoke(handle: Handle, method: Int, args: RustBuffer, outBuf: RustBufferByReference): Int {
+    override fun invoke(handle: Handle, method: Int, argData: Pointer, argLen: Int, outBuf: RustBufferByReference): Int {
         val cb = FfiConverterTypeLogger.lift(handle)
         return when (method) {
             IDX_CALLBACK_FREE -> {
@@ -504,7 +504,7 @@ internal class ForeignCallbackTypeLogger : ForeignCallback {
                 // Call the method, write to outBuf and return a status code
                 // See docs of ForeignCallback in `uniffi/src/ffi/foreigncallbacks.rs` for info
                 try {
-                    this.`invokeLog`(cb, args)
+                    this.`invokeLog`(cb, argData, argLen)
                     // Success
                     //outBuf.setValue(buffer)
                     1
@@ -535,8 +535,10 @@ internal class ForeignCallbackTypeLogger : ForeignCallback {
     }
 
     
-    private fun `invokeLog`(kotlinCallbackInterface: Logger, args: RustBuffer): Unit {
-            val buf = args.asByteBuffer() ?: throw InternalException("No ByteBuffer in RustBuffer; this is a Uniffi bug")
+    private fun `invokeLog`(kotlinCallbackInterface: Logger, argData: Pointer, argLen: Int): Unit {
+            val buf = argData.getByteBuffer(0, argLen.toLong()).also {
+                it.order(ByteOrder.BIG_ENDIAN)
+            }
             return kotlinCallbackInterface.`log`(
                     FfiConverterTypeRecord.read(buf)
                     )

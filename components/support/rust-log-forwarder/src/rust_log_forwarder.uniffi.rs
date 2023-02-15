@@ -224,7 +224,8 @@ uniffi::deps::static_assertions::assert_impl_all!(FfiConverterCallbackInterfaceL
 pub type ForeignCallback2 = unsafe extern "C" fn(
     handle: u64,
     method: u32,
-    args: *const uniffi::RustBuffer,
+    arg_data: *const u8,
+    arg_len: i32,
     buf_ptr: *mut uniffi::RustBuffer,
 ) -> std::ffi::c_int;
 
@@ -233,7 +234,6 @@ impl r#Logger for FfiConverterCallbackInterfaceLogger {
         let mut args_buf = Vec::new();
 
         <FfiConverterTypeRecord as uniffi::FfiConverter>::write(r#record, &mut args_buf);
-        let args_rbuf = uniffi::RustBuffer::from_vec(args_buf);
         let callback = FOREIGN_CALLBACK_LOGGER_INTERNALS.get_callback().unwrap();
 
         unsafe {
@@ -244,7 +244,7 @@ impl r#Logger for FfiConverterCallbackInterfaceLogger {
             //   RustBuffer.
             let mut ret_rbuf = uniffi::RustBuffer::new();
             let callback2: ForeignCallback2 = std::mem::transmute(callback);
-            let ret = callback2(self.handle, 1, &args_rbuf, &mut ret_rbuf);
+            let ret = callback2(self.handle, 1, args_buf.as_ptr(), args_buf.len().try_into().unwrap(), &mut ret_rbuf);
             #[allow(clippy::let_and_return, clippy::let_unit_value)]
             match ret {
                 1 => {
