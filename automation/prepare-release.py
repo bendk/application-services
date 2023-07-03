@@ -55,7 +55,7 @@ if changelog[0] != f"# v{major_version_number}.0 (In progress)":
     fatal_err(f"Unexpected first changelog line: {changelog[0]}")
 today_date = datetime.today().strftime("%Y-%m-%d")
 
-for i in range(10):
+for i in range(len(changelog)):
     if changelog[i] == "[Full Changelog](In progress)":
         changelog[i] = (
             f"[Full Changelog](https://github.com/mozilla/application-services/compare/"
