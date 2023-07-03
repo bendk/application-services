@@ -5,6 +5,7 @@
 # Usage: ./automation/prepare-release.py
 
 from datetime import datetime
+import argparse
 import webbrowser
 
 from shared import (RefNames, get_moz_remote, step_msg, fatal_err, run_cmd_checked,
@@ -13,6 +14,13 @@ from shared import (RefNames, get_moz_remote, step_msg, fatal_err, run_cmd_check
 # Constants
 VERSION_FILE = "version.txt"
 CHANGELOG_FILE = "CHANGELOG.md"
+
+# 0. Parse command line args
+parser = argparse.ArgumentParser()
+parser.add_argument("--no-push", help="Don't push changes to mozilla/application-services",
+                    action="store_true")
+args = parser.parse_args()
+
 
 # 1. Figure out which remote to push to
 moz_remote = get_moz_remote()
@@ -34,7 +42,8 @@ ensure_working_tree_clean()
 
 step_msg(f"Creating {refs.release}")
 run_cmd_checked(["git", "checkout", "-b", refs.release])
-run_cmd_checked(["git", "push", moz_remote, refs.release])
+if not args.no_push:
+    run_cmd_checked(["git", "push", moz_remote, refs.release])
 
 # 4. Create a PR to update the release branch
 
@@ -55,7 +64,7 @@ if changelog[0] != f"# v{major_version_number}.0 (In progress)":
     fatal_err(f"Unexpected first changelog line: {changelog[0]}")
 today_date = datetime.today().strftime("%Y-%m-%d")
 
-for i in range(10):
+for i in range(len(changelog)):
     if changelog[i] == "[Full Changelog](In progress)":
         changelog[i] = (
             f"[Full Changelog](https://github.com/mozilla/application-services/compare/"
@@ -102,16 +111,19 @@ with open(CHANGELOG_FILE, "w") as stream:
 
 step_msg("Creating a commit with the changes")
 run_cmd_checked(["git", "add", CHANGELOG_FILE])
+run_cmd_checked(["git", "add", BUILDCONFIG_FILE])
 run_cmd_checked(["git", "commit", "-m", f"Start release v{next_version_number}"])
 
 print()
-response = input("Great! Would you like to push and open the two pull-requests? ([Y]/N)").lower()
-if response != "y" and response != "" and response != "yes":
-    exit(0)
+if not args.no_push:
+    response = input("Great! Would you like to push and open the two pull-requests? ([Y]/N)").lower()
+    if response != "y" and response != "" and response != "yes":
+        exit(0)
 
-run_cmd_checked(["git", "push", moz_remote, refs.release_pr])
-run_cmd_checked(["git", "push", moz_remote, refs.start_release_pr])
+    run_cmd_checked(["git", "push", moz_remote, refs.release_pr])
+    run_cmd_checked(["git", "push", moz_remote, refs.start_release_pr])
 
-webbrowser.open_new_tab(f"https://github.com/mozilla/application-services/compare/{refs.release}...{refs.release_pr}")
-webbrowser.open_new_tab(f"https://github.com/mozilla/application-services/compare/{refs.main}...{refs.start_release_pr}")
+    webbrowser.open_new_tab(f"https://github.com/mozilla/application-services/compare/{refs.release}...{refs.release_pr}")
+    webbrowser.open_new_tab(f"https://github.com/mozilla/application-services/compare/{refs.main}...{refs.start_release_pr}")
+
 run_cmd_checked(["git", "checkout", refs.main])
