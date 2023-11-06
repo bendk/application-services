@@ -4,20 +4,14 @@ import Foundation
 var counter = DispatchGroup()
 
 class PlacesApiSwift {
-    let api = PlacesApi()
-    let writerQueue = DispatchQueue(label: "org.mozilla.appservices.places.writer")
-    let syncQueue = DispatchQueue(label: "org.mozilla.appservices.places.sync")
+    let api = PlacesApi(queue: DispatchQueue.global(qos: .userInitiated))
 
-    func insertBookmark(bookmark: Bookmark) {
-        writerQueue.sync {
-            api.insertBookmark(bookmark: bookmark)
-        }
+    func insertBookmark(bookmark: Bookmark) async {
+        await api.insertBookmark(bookmark: bookmark)
     }
 
-    func sync() {
-        syncQueue.sync {
-            api.sync()
-        }
+    func sync() async {
+        await api.sync()
     }
 }
 
@@ -27,14 +21,14 @@ counter.enter()
 Task {
     for i in 0...20 {
         let bookmark = Bookmark(url: "https://example.com/my-bookmarks/\(i)", title: "My Bookmark \(i)")
-        api.insertBookmark(bookmark: bookmark)
+        await api.insertBookmark(bookmark: bookmark)
     }
     counter.leave()
 }
 
 counter.enter()
 Task {
-    api.sync()
+    await api.sync()
     counter.leave()
 }
 

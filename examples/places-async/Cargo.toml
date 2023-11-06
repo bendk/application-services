@@ -9,13 +9,14 @@ edition = "2021"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
+async-mutex = "1.4"
 camino = "1.0.8"
 parking_lot = "0.12.1"
-uniffi = "0.25.0"
-uniffi_bindgen = "0.25.0"
+uniffi = { branch = "blocking-task-queue", git = "https://github.com/bendk/uniffi-rs.git" }
+uniffi_bindgen = { branch = "blocking-task-queue", git = "https://github.com/bendk/uniffi-rs.git" }
 
 [build-dependencies]
-uniffi = { version = "0.25.0", features = ["build"] }
+uniffi = { branch = "blocking-task-queue", git = "https://github.com/bendk/uniffi-rs.git", features = ["build"] }
 
 [[bin]]
 name = "kotlin"

@@ -5,9 +5,12 @@
 namespace places {};
 
 interface PlacesApi {
-    constructor();
+    constructor(BlockingTaskQueue queue);
 
+    [Async]
     void insert_bookmark(Bookmark bookmark);
+
+    [Async]
     void sync();
 };
 

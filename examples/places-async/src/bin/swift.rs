@@ -61,6 +61,7 @@ fn run_uniffi_bindgen(out_dir: &Utf8Path) {
         &out_dir.join(format!("{DLL_PREFIX}places_async.{DLL_EXTENSION}")),
         None,
         &[uniffi_bindgen::bindings::TargetLanguage::Swift],
+        None,
         out_dir,
         false,
     )

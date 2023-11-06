@@ -3,19 +3,14 @@ import uniffi.places.Bookmark
 import uniffi.places.PlacesApi
 
 class PlacesApiKotlin {
-    val api = PlacesApi()
-    val coroutineContext = Dispatchers.IO
+    val api = PlacesApi(Dispatchers.IO)
 
     suspend fun insertBookmark(bookmark: Bookmark) {
-        withContext(coroutineContext) {
-            api.insertBookmark(bookmark)
-        }
+        api.insertBookmark(bookmark)
     }
 
     suspend fun sync() {
-        withContext(coroutineContext) {
-            api.sync()
-        }
+        api.sync()
     }
 }
 

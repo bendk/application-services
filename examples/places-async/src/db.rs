@@ -9,6 +9,8 @@ use std::thread;
 use std::time::Duration;
 
 /// Simulate an SQLite transaction, which only allows one writer at a time
+///
+/// Note: use a parking_lot rather than async_mutex, since this is simulating a transaction.
 static DB_MUTEX: Mutex<()> = Mutex::new(());
 struct Transaction<'a>(MutexGuard<'a, ()>);
 
