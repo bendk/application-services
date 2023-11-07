@@ -2,7 +2,9 @@ import Foundation
 import places_mod
 
 let databasePath = CommandLine.arguments[1]
-print("opening \(databasePath)")
+let iteration = CommandLine.arguments[2]
+print("trying to crash places [use-connection-once] (\(iteration))")
+
 let api = try! placesApiNew(dbPath: databasePath)
 
 // Race a thread that calls `bookmarksGetTree` and one that runs maintenance
@@ -20,5 +22,3 @@ Task {
     try writer.runMaintenanceCheckpoint()
     try writer.runMaintenanceGenerateItems()
 }
-
-print("done")
