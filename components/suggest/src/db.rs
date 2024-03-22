@@ -767,12 +767,7 @@ impl<'a> SuggestDao<'a> {
                  full_keyword_id,
                  rank
              )
-             VALUES(
-                 :keyword,
-                 :suggestion_id,
-                 :full_keyword_id,
-                 :rank
-             )")?;
+             VALUES(?, ?, ?, ?)")?;
         for suggestion in suggestions {
             self.scope.err_if_interrupted()?;
             let common_details = suggestion.common_details();
@@ -866,14 +861,12 @@ impl<'a> SuggestDao<'a> {
                     _ => None,
                 };
 
-                insert_keyword_stmt.execute(
-                    named_params! {
-                        ":keyword": keyword.keyword,
-                        ":rank": keyword.rank,
-                        ":suggestion_id": suggestion_id,
-                        ":full_keyword_id": full_keyword_id,
-                    },
-                )?;
+                insert_keyword_stmt.execute((
+                    keyword.keyword,
+                    suggestion_id,
+                    full_keyword_id,
+                    keyword.rank,
+                ))?;
             }
         }
         Ok(())
