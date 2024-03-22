@@ -760,6 +760,19 @@ impl<'a> SuggestDao<'a> {
         record_id: &SuggestRecordId,
         suggestions: &[DownloadedAmpWikipediaSuggestion],
     ) -> Result<()> {
+        let mut insert_keyword_stmt = self.conn.prepare(
+            "INSERT INTO keywords(
+                 keyword,
+                 suggestion_id,
+                 full_keyword_id,
+                 rank
+             )
+             VALUES(
+                 :keyword,
+                 :suggestion_id,
+                 :full_keyword_id,
+                 :rank
+             )")?;
         for suggestion in suggestions {
             self.scope.err_if_interrupted()?;
             let common_details = suggestion.common_details();
@@ -853,19 +866,7 @@ impl<'a> SuggestDao<'a> {
                     _ => None,
                 };
 
-                self.conn.execute_cached(
-                    "INSERT INTO keywords(
-                         keyword,
-                         suggestion_id,
-                         full_keyword_id,
-                         rank
-                     )
-                     VALUES(
-                         :keyword,
-                         :suggestion_id,
-                         :full_keyword_id,
-                         :rank
-                     )",
+                insert_keyword_stmt.execute(
                     named_params! {
                         ":keyword": keyword.keyword,
                         ":rank": keyword.rank,
