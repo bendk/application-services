@@ -853,7 +853,7 @@ impl<'a> SuggestDao<'a> {
                     _ => None,
                 };
 
-                self.conn.execute(
+                self.conn.execute_cached(
                     "INSERT INTO keywords(
                          keyword,
                          suggestion_id,
