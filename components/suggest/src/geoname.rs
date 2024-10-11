@@ -30,13 +30,30 @@ pub enum GeonameType {
     Other,
 }
 
+/// This corresponds to a single row in the main "geoname" table described in
+/// the GeoNames documentation [1]. It represents a single place. We exclude
+/// fields we don't need.
+///
+/// [1] https://download.geonames.org/export/dump/readme.txt
 #[derive(Clone, Debug, PartialEq)]
 pub struct Geoname {
+    /// The `geonameid` straight from the geoname table.
     pub geoname_id: i64,
+    /// This is not present in the geoname table. Added for convenience.
     pub geoname_type: GeonameType,
+    /// This is pretty much the place's canonical name. Usually there will be a
+    /// row in the alternates table with the same name, but not always. When
+    /// there is such a row, it doesn't always have `is_preferred_name` set, and
+    /// in fact fact there may be another row with a different name with
+    /// `is_preferred_name` set.
     pub name: String,
+    /// ISO-3166 two-letter uppercase country code, e.g., "US".
     pub country_code: String,
+    /// The top-level administrative region for the place within its country,
+    /// like a state or province. For the U.S., the two-letter uppercase state
+    /// abbreviation.
     pub admin1_code: String,
+    /// Population size.
     pub population: u64,
 }
 
@@ -68,22 +85,18 @@ pub struct GeonameCache {
 pub(crate) struct DownloadedGeoname {
     /// The `geonameid` straight from the geoname table.
     pub id: i64,
-    /// This is pretty much the place's canonical name. Usually there will be a
-    /// row in the alternates table with the same name, but not always. When
-    /// there is such a row, it doesn't always have `is_preferred_name` set, and
-    /// in fact fact there may be another row with a different name with
-    /// `is_preferred_name` set.
-    ///
     /// NOTE: For ease of implementation, this name should always also be
-    /// included as a lowercased alternate name.
+    /// included as a lowercased alternate name even if the original GeoNames
+    /// data doesn't include it as an alternate.
     pub name: String,
-    /// "P" - Populated place like a city or village
-    /// "A" - Administrative division like a country, state, or region
+    /// "P" - Populated place like a city or village.
+    /// "A" - Administrative division like a country, state, or region.
     pub feature_class: String,
-    /// "ADM1" - Primary administrative division like a U.S. state
+    /// "ADM1" - Primary administrative division like a U.S. state.
     pub feature_code: String,
+    /// ISO-3166 two-letter uppercase country code, e.g., "US".
     pub country_code: String,
-    /// For U.S., two-letter state abbreviation
+    /// For the U.S., the two-letter uppercase state abbreviation.
     pub admin1_code: String,
     /// This can be helpful for resolving name conflicts. If two geonames have
     /// the same name, we might prefer the one with the larger population.
@@ -99,10 +112,10 @@ pub(crate) struct DownloadedGeonameAlternateAttachment {
     /// metrics. We pre-compute this to avoid doing duplicate work on all user's
     /// machines.
     pub max_alternate_name_word_count: u32,
-    /// NOTE: For ease of implementation, this should always include an
+    /// NOTE: For ease of implementation, this list should always include an
     /// alternate whose name is a lowercased version of
-    /// `DownloadedGeoname::name` (i.e., the "canonical" name) for each geoname
-    /// in the attachment.
+    /// `DownloadedGeoname::name` for each geoname in the attachment, even if
+    /// the original GeoNames data doesn't include it as an alternate.
     pub alternates: Vec<DownloadedGeonameAlternate>,
 }
 

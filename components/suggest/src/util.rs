@@ -42,7 +42,10 @@ pub fn full_keyword(query: &str, keywords: &[impl AsRef<str>]) -> String {
 
 /// Peforms a depth-first traversal over all possible chunk sequences in a
 /// string, applies a filter-map function to each chunk in each sequence, and
-/// collects the filter-mapped sequences in a `Vec`.
+/// collects the filter-mapped sequences in a `Vec`. A "chunk" is a slice of one
+/// or more consecutive words in the string such that the slices do not overlap.
+/// It's analogous to the concept of slice chunks described in [1] where the
+/// elements in this case are words in a string.
 ///
 /// `max_chunk_size` controls the maximum chunk size (in number of words), which
 /// influences the branching factor at each step in the traversal.
@@ -66,6 +69,8 @@ pub fn full_keyword(query: &str, keywords: &[impl AsRef<str>]) -> String {
 ///
 /// Traversal ends and the function returns when all paths have been visited.
 /// The returned `Vec` will contain all traversal paths that weren't pruned.
+///
+/// [1] https://doc.rust-lang.org/std/vec/struct.Vec.html#method.chunks
 ///
 /// # Examples
 ///
@@ -152,50 +157,76 @@ pub fn full_keyword(query: &str, keywords: &[impl AsRef<str>]) -> String {
 pub fn filter_map_chunks<T: Clone>(
     query: &str,
     max_chunk_size: usize,
-    f: impl Fn(String, usize, &[T]) -> Result<Option<Vec<T>>>,
+    f: impl Fn(&str, usize, &[T]) -> Result<Option<Vec<T>>>,
 ) -> Result<Vec<Vec<T>>> {
     let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
-    filter_map_chunks_recurse(&words, max_chunk_size, &f, vec![], 0)
+    let normalized_query = words.join(" ");
+    filter_map_chunks_recurse(
+        &words,
+        &normalized_query,
+        &mut vec![],
+        0,
+        max_chunk_size,
+        &f,
+    )
 }
 
+/// `remaining_words` is the slice of remaining words in the query string at
+/// this step. `remaining_query` is the remaining slice of the query string at
+/// this step.
+///
+/// `path` is the sequence of values returned by the filter-map function so far
+/// at this step.
+///
+/// `chunk_index` is the word-based index in the query string at this step.
 fn filter_map_chunks_recurse<T: Clone>(
-    words: &[&str],
-    max_chunk_size: usize,
-    f: &impl Fn(String, usize, &[T]) -> Result<Option<Vec<T>>>,
-    path: Vec<T>,
+    remaining_words: &[&str],
+    remaining_query: &str,
+    path: &mut Vec<T>,
     chunk_index: usize,
+    max_chunk_size: usize,
+    f: &impl Fn(&str, usize, &[T]) -> Result<Option<Vec<T>>>,
 ) -> Result<Vec<Vec<T>>> {
     // Filtered-in (non-pruned) paths that will be returned from this step of
     // the traversal.
     let mut this_step_paths: Vec<Vec<T>> = vec![];
 
     for chunk_size in 1..=max_chunk_size {
-        if words.len() < chunk_size {
+        if remaining_words.len() < chunk_size {
             // `chunk_size` and the later chunk sizes in this for-loop are too
             // big to visit the remaining words. We already visited them earlier
             // in the loop when the chunk size was small enough.
             break;
         }
 
-        let chunk = words[..chunk_size].join(" ");
+        // Get the current chunk within the remaining query. Its char length is
+        // the sum of the lengths of the words in the chunk + `chunk_size - 1`
+        // spaces between the words.
+        let chunk_char_len = remaining_words[..chunk_size]
+            .iter()
+            .fold(chunk_size - 1, |memo, w| memo + w.len());
+        let chunk = &remaining_query[..chunk_char_len];
+
+        // Call the mapper function.
         if let Some(mapped_values) = f(chunk, chunk_index, &path[..])? {
             for value in mapped_values {
-                if chunk_size == words.len() {
+                if chunk_size == remaining_words.len() {
                     // This is the final chunk in the path. Stop recursing.
                     this_step_paths.push(vec![value.clone()]);
                 } else {
-                    // Recurse. Note that the new `words` slice won't be empty
-                    // because if it were, `chunk_size` would equal the
+                    // Recurse. Note that the new `remaining_words` slice won't
+                    // be empty because if it were, `chunk_size` would equal the
                     // remaining word count, which is if-branch condition.
-                    let mut new_path = path.clone();
-                    new_path.push(value.clone());
+                    path.push(value.clone());
                     let subtree_paths = filter_map_chunks_recurse(
-                        &words[chunk_size..],
+                        &remaining_words[chunk_size..],
+                        &remaining_query[(chunk_char_len + 1)..],
+                        path,
+                        chunk_index + chunk_size,
                         max_chunk_size,
                         f,
-                        new_path,
-                        chunk_index + chunk_size,
                     )?;
+                    path.pop();
                     for mut p in subtree_paths {
                         p.insert(0, value.clone());
                         this_step_paths.push(p);
@@ -286,7 +317,7 @@ mod tests {
     #[test]
     fn filter_map_chunks_1() -> anyhow::Result<()> {
         let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| {
-            Ok(Some(vec![(chunk, chunk_index)]))
+            Ok(Some(vec![(chunk.to_string(), chunk_index)]))
         })?;
         check_paths(
             paths,
@@ -297,29 +328,31 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            Ok(Some(vec![(chunk, chunk_index)]))
-        })?;
-        check_paths(
-            paths,
-            vec![
-                vec![("a", 0), ("b", 1), ("c", 2), ("d", 3), ("e", 4)],
-                vec![("a", 0), ("b", 1), ("c", 2), ("d e", 3)],
-                vec![("a", 0), ("b", 1), ("c d", 2), ("e", 4)],
-                vec![("a", 0), ("b c", 1), ("d", 3), ("e", 4)],
-                vec![("a", 0), ("b c", 1), ("d e", 3)],
-                vec![("a b", 0), ("c", 2), ("d", 3), ("e", 4)],
-                vec![("a b", 0), ("c", 2), ("d e", 3)],
-                vec![("a b", 0), ("c d", 2), ("e", 4)],
-            ],
-        );
+        for query in ["a b c d e", "   a   b  c        d  e "] {
+            let paths = filter_map_chunks(query, 2, |chunk, chunk_index, _| {
+                Ok(Some(vec![(chunk.to_string(), chunk_index)]))
+            })?;
+            check_paths(
+                paths,
+                vec![
+                    vec![("a", 0), ("b", 1), ("c", 2), ("d", 3), ("e", 4)],
+                    vec![("a", 0), ("b", 1), ("c", 2), ("d e", 3)],
+                    vec![("a", 0), ("b", 1), ("c d", 2), ("e", 4)],
+                    vec![("a", 0), ("b c", 1), ("d", 3), ("e", 4)],
+                    vec![("a", 0), ("b c", 1), ("d e", 3)],
+                    vec![("a b", 0), ("c", 2), ("d", 3), ("e", 4)],
+                    vec![("a b", 0), ("c", 2), ("d e", 3)],
+                    vec![("a b", 0), ("c d", 2), ("e", 4)],
+                ],
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn filter_map_chunks_3() -> anyhow::Result<()> {
         let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            Ok(Some(vec![(chunk, chunk_index)]))
+            Ok(Some(vec![(chunk.to_string(), chunk_index)]))
         })?;
         check_paths(
             paths,
@@ -345,7 +378,7 @@ mod tests {
     #[test]
     fn filter_map_chunks_4() -> anyhow::Result<()> {
         let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            Ok(Some(vec![(chunk, chunk_index)]))
+            Ok(Some(vec![(chunk.to_string(), chunk_index)]))
         })?;
         check_paths(
             paths,
@@ -373,7 +406,7 @@ mod tests {
     #[test]
     fn filter_map_chunks_5() -> anyhow::Result<()> {
         let paths = filter_map_chunks("a b c d e", 5, |chunk, chunk_index, _| {
-            Ok(Some(vec![(chunk, chunk_index)]))
+            Ok(Some(vec![(chunk.to_string(), chunk_index)]))
         })?;
         check_paths(
             paths,
@@ -499,11 +532,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_1_prune_a() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| match chunk {
+            "a" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(paths, vec![]);
         Ok(())
@@ -511,11 +542,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_1_prune_b() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| match chunk {
+            "b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(paths, vec![]);
         Ok(())
@@ -523,11 +552,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_1_prune_c() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| match chunk {
+            "c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(paths, vec![]);
         Ok(())
@@ -535,11 +562,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_1_prune_d() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| match chunk {
+            "d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(paths, vec![]);
         Ok(())
@@ -547,11 +572,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_1_prune_e() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 1, |chunk, chunk_index, _| match chunk {
+            "e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(paths, vec![]);
         Ok(())
@@ -559,11 +582,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_a() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "a" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -578,11 +599,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_b() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -599,11 +618,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_c() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -619,11 +636,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_d() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -640,11 +655,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_e() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -659,11 +672,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_ab() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "a b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -680,11 +691,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_bc() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "b c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -702,11 +711,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_cd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -724,11 +731,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_de() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -745,11 +750,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_a_bc() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" | "b c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "a" | "b c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -764,11 +767,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_a_cd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" | "c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "a" | "c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -782,11 +783,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_bc_cd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c" | "c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "b c" | "c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -802,11 +801,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_2_prune_bc_de() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c" | "d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 2, |chunk, chunk_index, _| match chunk {
+            "b c" | "d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -822,11 +819,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_a() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "a" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -844,11 +839,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_b() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -869,11 +862,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_c() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -894,11 +885,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_d() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -919,11 +908,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_e() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -941,11 +928,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_ab() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "a b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -966,11 +951,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_bc() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "b c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -993,11 +976,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_cd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1020,11 +1001,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_de() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1045,11 +1024,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_abc() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a b c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "a b c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1072,11 +1049,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_bcd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "b c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1100,11 +1075,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_cde() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "c d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1127,11 +1100,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_3_prune_a_bc_cde() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" | "b c" | "c d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 3, |chunk, chunk_index, _| match chunk {
+            "a" | "b c" | "c d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1148,11 +1119,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_a() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "a" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1171,11 +1140,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_b() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1198,11 +1165,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_c() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1225,11 +1190,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_d() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1252,11 +1215,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_e() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1275,11 +1236,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_ab() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a b" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "a b" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1302,11 +1261,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_bc() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "b c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1331,11 +1288,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_cd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1360,11 +1315,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_de() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1387,11 +1340,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_abc() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a b c" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "a b c" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1416,11 +1367,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_bcd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "b c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1446,11 +1395,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_cde() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "c d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "c d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1475,11 +1422,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_abcd() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a b c d" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "a b c d" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1505,11 +1450,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_bcde() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "b c d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "b c d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1535,11 +1478,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_a_bc_de() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" | "b c" | "d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "a" | "b c" | "d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,
@@ -1556,11 +1497,9 @@ mod tests {
 
     #[test]
     fn filter_map_chunks_4_prune_a_bc_cde() -> anyhow::Result<()> {
-        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| {
-            match chunk.as_str() {
-                "a" | "b c" | "c d e" => Ok(None),
-                _ => Ok(Some(vec![(chunk, chunk_index)])),
-            }
+        let paths = filter_map_chunks("a b c d e", 4, |chunk, chunk_index, _| match chunk {
+            "a" | "b c" | "c d e" => Ok(None),
+            _ => Ok(Some(vec![(chunk.to_string(), chunk_index)])),
         })?;
         check_paths(
             paths,

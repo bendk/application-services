@@ -97,7 +97,7 @@ impl SuggestDao<'_> {
                 TokenType::WeatherKeyword,
             ] {
                 if !path.iter().any(|t| t.token_type() == tt) {
-                    let tokens = self.match_weather_tokens(tt, path, &chunk, chunk_index == 0)?;
+                    let tokens = self.match_weather_tokens(tt, path, chunk, chunk_index == 0)?;
                     if !tokens.is_empty() {
                         // This chunk matches, so return the tokens to continue
                         // down this path.

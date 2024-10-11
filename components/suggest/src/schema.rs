@@ -49,7 +49,10 @@ CREATE TABLE keywords(
     PRIMARY KEY (keyword, suggestion_id)
 ) WITHOUT ROWID;
 
--- Metrics for the `keywords` table.
+-- Metrics for the `keywords` table per provider. Not all providers use or
+-- update it. If you modify an existing provider to use this, you will need to
+-- populate this table somehow with metrics for the provider's existing
+-- keywords, for example as part of a schema migration.
 CREATE TABLE keywords_metrics(
     record_id TEXT NOT NULL PRIMARY KEY,
     provider INTEGER NOT NULL,
