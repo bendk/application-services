@@ -76,9 +76,21 @@ pub struct GeonameCache {
     pub max_name_word_count: usize,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct DownloadedGeonameAttachment {
+    /// The max length of all names in the attachment. Used for name metrics. We
+    /// pre-compute this to avoid doing duplicate work on all user's machines.
+    pub max_alternate_name_length: u32,
+    /// The max word count across all names in the attachment. Used for name
+    /// metrics. We pre-compute this to avoid doing duplicate work on all user's
+    /// machines.
+    pub max_alternate_name_word_count: u32,
+    pub geonames: Vec<DownloadedGeoname>,
+}
+
 /// This corresponds to a single row in the main "geoname" table described in
-/// the GeoNames documentation [1]. It represents a single place. We exclude
-/// fields we don't need.
+/// the GeoNames documentation [1] except where noted. It represents a single
+/// place. We exclude fields we don't need.
 ///
 /// [1] https://download.geonames.org/export/dump/readme.txt
 #[derive(Clone, Debug, Deserialize)]
@@ -101,36 +113,15 @@ pub(crate) struct DownloadedGeoname {
     /// This can be helpful for resolving name conflicts. If two geonames have
     /// the same name, we might prefer the one with the larger population.
     pub population: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct DownloadedGeonameAlternateAttachment {
-    /// The max length of all names in the attachment. Used for name metrics. We
-    /// pre-compute this to avoid doing duplicate work on all user's machines.
-    pub max_alternate_name_length: u32,
-    /// The max word count across all names in the attachment. Used for name
-    /// metrics. We pre-compute this to avoid doing duplicate work on all user's
-    /// machines.
-    pub max_alternate_name_word_count: u32,
-    /// NOTE: For ease of implementation, this list should always include an
-    /// alternate whose name is a lowercased version of
-    /// `DownloadedGeoname::name` for each geoname in the attachment, even if
-    /// the original GeoNames data doesn't include it as an alternate.
-    pub alternates: Vec<DownloadedGeonameAlternate>,
-}
-
-/// This corresponds to a single row in the "alternate names" table described in
-/// the GeoNames documentation. It represents a single name for a geoname, and
-/// despite the word "alternate", it can be *the* proper name for the place. One
-/// geoname can map to many alternates. We exclude fields we don't need.
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct DownloadedGeonameAlternate {
-    /// The `alternateNameId` straight from the alternate names table.
-    pub id: i64,
-    pub geoname_id: i64,
-    /// NOTE: This should always be lowercase. We pre-compute lowercase versions
-    /// to avoid doing duplicate work on all user's machines.
-    pub alternate_name: String,
+    /// List of lowercase names that the place is known by. Despite the word
+    /// "alternate", this often includes the place's proper name. This list is
+    /// pulled from the "alternate names" table described in the GeoNames
+    /// documentation and included here inline.
+    ///
+    /// NOTE: For ease of implementation, this list should always include a
+    /// lowercase version of `name` even if the original GeoNames data doesn't
+    /// include it as an alternate.
+    pub alternate_names: Vec<String>,
 }
 
 impl SuggestDao<'_> {
@@ -186,8 +177,8 @@ impl SuggestDao<'_> {
                             FROM
                                 geonames_alternates
                             WHERE
-                                CASE :prefix WHEN FALSE THEN alternate_name = :name
-                                ELSE (alternate_name BETWEEN :name AND :name || X'FFFF') END
+                                CASE :prefix WHEN FALSE THEN name = :name
+                                ELSE (name BETWEEN :name AND :name || X'FFFF') END
                         )
                         AND {}
                     ORDER BY
@@ -232,30 +223,20 @@ impl SuggestDao<'_> {
     fn insert_geonames(
         &mut self,
         record_id: &SuggestRecordId,
-        geonames: &[DownloadedGeoname],
+        attachments: &[DownloadedGeonameAttachment],
     ) -> Result<()> {
         self.scope.err_if_interrupted()?;
-        let mut insert = GeonameInsertStatement::new(self.conn)?;
-        for g in geonames {
-            insert.execute(record_id, g)?;
-        }
-        Ok(())
-    }
-
-    /// Inserts GeoNames alternates data into the database.
-    fn insert_geonames_alternates(
-        &mut self,
-        record_id: &SuggestRecordId,
-        attachments: &[DownloadedGeonameAlternateAttachment],
-    ) -> Result<()> {
-        self.scope.err_if_interrupted()?;
-        let mut insert = GeonameAlternateInsertStatement::new(self.conn)?;
+        let mut geoname_insert = GeonameInsertStatement::new(self.conn)?;
+        let mut alt_insert = GeonameAlternateInsertStatement::new(self.conn)?;
         let mut metrics_insert = GeonameMetricsInsertStatement::new(self.conn)?;
         let mut max_len = 0;
         let mut max_word_count = 0;
         for attach in attachments {
-            for alt in &attach.alternates {
-                insert.execute(record_id, alt)?;
+            for geoname in &attach.geonames {
+                geoname_insert.execute(record_id, geoname)?;
+                for alt in &geoname.alternate_names {
+                    alt_insert.execute(alt, geoname.id)?;
+                }
             }
             max_len = std::cmp::max(max_len, attach.max_alternate_name_length as usize);
             max_word_count = std::cmp::max(
@@ -308,20 +289,8 @@ where
         record: &Record,
         download_timer: &mut DownloadTimer,
     ) -> Result<()> {
-        self.download_attachment(dao, record, download_timer, |dao, record_id, geonames| {
-            dao.insert_geonames(record_id, geonames)
-        })
-    }
-
-    /// Inserts a GeoNames alternates record into the database.
-    pub fn process_geoname_alternates_record(
-        &self,
-        dao: &mut SuggestDao,
-        record: &Record,
-        download_timer: &mut DownloadTimer,
-    ) -> Result<()> {
         self.download_attachment(dao, record, download_timer, |dao, record_id, data| {
-            dao.insert_geonames_alternates(record_id, data)
+            dao.insert_geonames(record_id, data)
         })
     }
 }
@@ -369,23 +338,17 @@ impl<'conn> GeonameAlternateInsertStatement<'conn> {
     fn new(conn: &'conn Connection) -> Result<Self> {
         Ok(Self(conn.prepare(
             "INSERT INTO geonames_alternates(
-                 id,
-                 record_id,
-                 geoname_id,
-                 alternate_name
+                 name,
+                 geoname_id
              )
-             VALUES(?, ?, ?, ?)
+             VALUES(?, ?)
              ",
         )?))
     }
 
-    fn execute(
-        &mut self,
-        record_id: &SuggestRecordId,
-        a: &DownloadedGeonameAlternate,
-    ) -> Result<()> {
+    fn execute(&mut self, name: &str, geoname_id: i64) -> Result<()> {
         self.0
-            .execute((&a.id, record_id.as_str(), &a.geoname_id, &a.alternate_name))
+            .execute((name, geoname_id))
             .with_context("geoname alternate insert")?;
         Ok(())
     }
@@ -428,172 +391,93 @@ pub(crate) mod tests {
     };
 
     pub(crate) fn new_test_store() -> TestStore {
-        TestStore::new(
-            MockRemoteSettingsClient::default()
-                .with_record(
-                    "geonames",
-                    "geonames-0",
-                    json!([
-                        // Waterloo, AL
-                        {
-                            "id": 1,
-                            "name": "Waterloo",
-                            "feature_class": "P",
-                            "feature_code": "PPL",
-                            "country_code": "US",
-                            "admin1_code": "AL",
-                            "population": 200,
-                        },
-                        // AL
-                        {
-                            "id": 2,
-                            "name": "Alabama",
-                            "feature_class": "A",
-                            "feature_code": "ADM1",
-                            "country_code": "US",
-                            "admin1_code": "AL",
-                            "population": 4530315,
-                        },
-                        // Waterloo, IA
-                        {
-                            "id": 3,
-                            "name": "Waterloo",
-                            "feature_class": "P",
-                            "feature_code": "PPLA2",
-                            "country_code": "US",
-                            "admin1_code": "IA",
-                            "population": 68460,
-                        },
-                        // IA
-                        {
-                            "id": 4,
-                            "name": "Iowa",
-                            "feature_class": "A",
-                            "feature_code": "ADM1",
-                            "country_code": "US",
-                            "admin1_code": "IA",
-                            "population": 2955010,
-                        },
-                        // Waterloo (Lake, not a city or region)
-                        {
-                            "id": 5,
-                            "name": "waterloo lake",
-                            "feature_class": "H",
-                            "feature_code": "LK",
-                            "country_code": "US",
-                            "admin1_code": "TX",
-                            "population": 0,
-                        },
-                        // New York City
-                        {
-                            "id": 6,
-                            "name": "New York City",
-                            "feature_class": "P",
-                            "feature_code": "PPL",
-                            "country_code": "US",
-                            "admin1_code": "NY",
-                            "population": 8804190,
-                        },
-                        // NY state
-                        {
-                            "id": 7,
-                            "name": "New York",
-                            "feature_class": "A",
-                            "feature_code": "ADM1",
-                            "country_code": "US",
-                            "admin1_code": "NY",
-                            "population": 19274244,
-                        },
-                    ]),
-                )
-                .with_record(
-                    "geonames-alternates",
-                    "geonames-alternates-0",
-                    json!({
-                        "max_alternate_name_length": "new york city".len(),
-                        "max_alternate_name_word_count": 3,
-                        "alternates": [
-                            // Waterloo, AL
-                            {
-                                "id": 1,
-                                "geoname_id": 1,
-                                "alternate_name": "waterloo",
-                            },
-                            // AL
-                            {
-                                "id": 2,
-                                "geoname_id": 2,
-                                "alternate_name": "al",
-                            },
-                            {
-                                "id": 3,
-                                "geoname_id": 2,
-                                "alternate_name": "alabama",
-                            },
-                            // Waterloo, IA
-                            {
-                                "id": 4,
-                                "geoname_id": 3,
-                                "alternate_name": "waterloo",
-                            },
-                            // IA
-                            {
-                                "id": 5,
-                                "geoname_id": 4,
-                                "alternate_name": "ia",
-                            },
-                            {
-                                "id": 6,
-                                "geoname_id": 4,
-                                "alternate_name": "iowa",
-                            },
-                            // Waterloo (Lake)
-                            {
-                                "id": 7,
-                                "geoname_id": 5,
-                                "alternate_name": "waterloo",
-                            },
-                            {
-                                "id": 8,
-                                "geoname_id": 5,
-                                "alternate_name": "waterloo lake",
-                            },
-                            // New York City
-                            {
-                                "id": 9,
-                                "geoname_id": 6,
-                                "alternate_name": "new york city",
-                            },
-                            {
-                                "id": 10,
-                                "geoname_id": 6,
-                                "alternate_name": "new york",
-                            },
-                            {
-                                "id": 11,
-                                "geoname_id": 6,
-                                "alternate_name": "nyc",
-                            },
-                            {
-                                "id": 12,
-                                "geoname_id": 6,
-                                "alternate_name": "ny",
-                            },
-                            // NY state
-                            {
-                                "id": 13,
-                                "geoname_id": 7,
-                                "alternate_name": "ny",
-                            },
-                            {
-                                "id": 14,
-                                "geoname_id": 7,
-                                "alternate_name": "new york",
-                            },
-                        ],
-                    }),
-                ),
-        )
+        TestStore::new(MockRemoteSettingsClient::default().with_record(
+            "geonames",
+            "geonames-0",
+            json!({
+                "max_alternate_name_length": "new york city".len(),
+                "max_alternate_name_word_count": 3,
+                "geonames": [
+                    // Waterloo, AL
+                    {
+                        "id": 1,
+                        "name": "Waterloo",
+                        "feature_class": "P",
+                        "feature_code": "PPL",
+                        "country_code": "US",
+                        "admin1_code": "AL",
+                        "population": 200,
+                        "alternate_names": ["waterloo"],
+                    },
+                    // AL
+                    {
+                        "id": 2,
+                        "name": "Alabama",
+                        "feature_class": "A",
+                        "feature_code": "ADM1",
+                        "country_code": "US",
+                        "admin1_code": "AL",
+                        "population": 4530315,
+                        "alternate_names": ["al", "alabama"],
+                    },
+                    // Waterloo, IA
+                    {
+                        "id": 3,
+                        "name": "Waterloo",
+                        "feature_class": "P",
+                        "feature_code": "PPLA2",
+                        "country_code": "US",
+                        "admin1_code": "IA",
+                        "population": 68460,
+                        "alternate_names": ["waterloo"],
+                    },
+                    // IA
+                    {
+                        "id": 4,
+                        "name": "Iowa",
+                        "feature_class": "A",
+                        "feature_code": "ADM1",
+                        "country_code": "US",
+                        "admin1_code": "IA",
+                        "population": 2955010,
+                        "alternate_names": ["ia", "iowa"],
+                    },
+                    // Waterloo (Lake, not a city or region)
+                    {
+                        "id": 5,
+                        "name": "waterloo lake",
+                        "feature_class": "H",
+                        "feature_code": "LK",
+                        "country_code": "US",
+                        "admin1_code": "TX",
+                        "population": 0,
+                        "alternate_names": ["waterloo", "waterloo lake"],
+                    },
+                    // New York City
+                    {
+                        "id": 6,
+                        "name": "New York City",
+                        "feature_class": "P",
+                        "feature_code": "PPL",
+                        "country_code": "US",
+                        "admin1_code": "NY",
+                        "population": 8804190,
+                        "alternate_names": ["new york city", "new york", "nyc", "ny"],
+                    },
+                    // NY state
+                    {
+                        "id": 7,
+                        "name": "New York",
+                        "feature_class": "A",
+                        "feature_code": "ADM1",
+                        "country_code": "US",
+                        "admin1_code": "NY",
+                        "population": 19274244,
+                        "alternate_names": ["ny", "new york"],
+                    },
+                ],
+            }),
+        ))
     }
 
     fn waterloo_al() -> Geoname {
@@ -955,21 +839,21 @@ pub(crate) mod tests {
         let mut store = TestStore::new(
             MockRemoteSettingsClient::default()
                 .with_record(
-                    "geonames-alternates",
-                    "geonames-alternates-0",
+                    "geonames",
+                    "geonames-0",
                     json!({
                         "max_alternate_name_length": 10,
                         "max_alternate_name_word_count": 5,
-                        "alternates": []
+                        "geonames": []
                     }),
                 )
                 .with_record(
-                    "geonames-alternates",
-                    "geonames-alternates-1",
+                    "geonames",
+                    "geonames-1",
                     json!({
                         "max_alternate_name_length": 20,
                         "max_alternate_name_word_count": 2,
-                        "alternates": []
+                        "geonames": []
                     }),
                 ),
         );
@@ -990,7 +874,7 @@ pub(crate) mod tests {
         // Delete the first record. The metrics should change.
         store
             .client_mut()
-            .delete_record("quicksuggest", "geonames-alternates-0");
+            .delete_record("quicksuggest", "geonames-0");
         store.ingest(SuggestIngestionConstraints {
             providers: Some(vec![SuggestionProvider::Weather]),
             ..SuggestIngestionConstraints::all_providers()
@@ -1004,12 +888,12 @@ pub(crate) mod tests {
 
         // Add a new record. The metrics should change again.
         store.client_mut().add_record(
-            "geonames-alternates",
-            "geonames-alternates-3",
+            "geonames",
+            "geonames-3",
             json!({
                 "max_alternate_name_length": 15,
                 "max_alternate_name_word_count": 3,
-                "alternates": []
+                "geonames": []
             }),
         );
         store.ingest(SuggestIngestionConstraints {
@@ -1067,12 +951,12 @@ pub(crate) mod tests {
             )?;
             assert_eq!(g_ids, Vec::<i64>::new());
 
-            let alt_ids = dao.conn.query_rows_and_then(
-                "SELECT id FROM geonames_alternates",
+            let alt_g_ids = dao.conn.query_rows_and_then(
+                "SELECT geoname_id FROM geonames_alternates",
                 [],
-                |row| -> Result<i64> { Ok(row.get("id")?) },
+                |row| -> Result<i64> { Ok(row.get("geoname_id")?) },
             )?;
-            assert_eq!(alt_ids, Vec::<i64>::new());
+            assert_eq!(alt_g_ids, Vec::<i64>::new());
 
             Ok(())
         })?;

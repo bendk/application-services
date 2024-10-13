@@ -203,13 +203,11 @@ CREATE INDEX geonames_feature_class ON geonames(feature_class);
 CREATE INDEX geonames_feature_code ON geonames(feature_code);
 
 CREATE TABLE geonames_alternates(
-    id INTEGER PRIMARY KEY,
-    record_id TEXT NOT NULL,
-    geoname_id INTEGER,
-    alternate_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    geoname_id INTEGER NOT NULL,
+    PRIMARY KEY (name, geoname_id),
     FOREIGN KEY(geoname_id) REFERENCES geonames(id) ON DELETE CASCADE
-);
-CREATE INDEX geonames_alternates_alternate_name ON geonames_alternates(alternate_name);
+) WITHOUT ROWID;
 
 CREATE TABLE geonames_metrics(
     record_id TEXT NOT NULL PRIMARY KEY,
@@ -508,13 +506,11 @@ CREATE INDEX geonames_feature_class ON geonames(feature_class);
 CREATE INDEX geonames_feature_code ON geonames(feature_code);
 
 CREATE TABLE geonames_alternates(
-    id INTEGER PRIMARY KEY,
-    record_id TEXT NOT NULL,
-    geoname_id INTEGER,
-    alternate_name TEXT NOT NULL,
+    name TEXT NOT NULL,
+    geoname_id INTEGER NOT NULL,
+    PRIMARY KEY (name, geoname_id),
     FOREIGN KEY(geoname_id) REFERENCES geonames(id) ON DELETE CASCADE
-);
-CREATE INDEX geonames_alternates_alternate_name ON geonames_alternates(alternate_name);
+) WITHOUT ROWID;
 
 CREATE TABLE geonames_metrics(
     record_id TEXT NOT NULL PRIMARY KEY,

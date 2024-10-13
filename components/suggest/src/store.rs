@@ -672,9 +672,6 @@ where
                 }
             }
             SuggestRecord::Geonames => self.process_geoname_record(dao, record, download_timer)?,
-            SuggestRecord::GeonamesAlternates => {
-                self.process_geoname_alternates_record(dao, record, download_timer)?
-            }
         }
         Ok(())
     }

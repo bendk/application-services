@@ -107,11 +107,7 @@ impl SuggestionProvider {
             Self::Pocket => vec![SuggestRecordType::Pocket],
             Self::Yelp => vec![SuggestRecordType::Yelp],
             Self::Mdn => vec![SuggestRecordType::Mdn],
-            Self::Weather => vec![
-                SuggestRecordType::Weather,
-                SuggestRecordType::Geonames,
-                SuggestRecordType::GeonamesAlternates,
-            ],
+            Self::Weather => vec![SuggestRecordType::Weather, SuggestRecordType::Geonames],
             Self::AmpMobile => vec![SuggestRecordType::AmpMobile],
             Self::Fakespot => vec![SuggestRecordType::Fakespot],
             Self::Exposure => vec![SuggestRecordType::Exposure],
