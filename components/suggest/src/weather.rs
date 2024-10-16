@@ -3,6 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+use std::collections::HashSet;
+
 use rusqlite::named_params;
 use serde::Deserialize;
 use sql_support::ConnExt;
@@ -13,13 +15,13 @@ use crate::{
         KeywordInsertStatement, KeywordMetricsInsertStatement, SuggestDao,
         SuggestionInsertStatement, DEFAULT_SUGGESTION_SCORE,
     },
-    geoname::{Geoname, GeonameType},
+    geoname::{Geoname, GeonameCache, GeonameType},
     metrics::DownloadTimer,
     provider::SuggestionProvider,
     rs::{Client, Record, SuggestRecordId},
     store::SuggestStoreInner,
     suggestion::Suggestion,
-    util::filter_map_chunks,
+    util::{ChunkedString, ChunkedStringIter},
     Result, SuggestionQuery,
 };
 
@@ -70,14 +72,12 @@ impl SuggestDao<'_> {
             return Ok(vec![]);
         }
 
-        // The first step in parsing the query is lowercasing and splitting it
-        // into words. We want to avoid that work for strings that are so long
-        // they can't possibly match. The longest possible weather query is two
-        // geonames + one weather keyword + at least two spaces between those
-        // three components, say, 10 spaces total for some wiggle room. There's
-        // not much point in an analogous min length check since weather
-        // suggestions can be matched on city alone and many city names are only
-        // a few characters long ("nyc").
+        // Avoid doing work for strings that are so long they can't possibly match. The longest
+        // possible weather query is two geonames + one weather keyword + at least two spaces
+        // between those three components, say, 10 spaces total for some wiggle room. There's not
+        // much point in an analogous min length check since weather suggestions can be matched on
+        // city alone and many city names are only a few characters long ("nyc").
+
         let g_cache = self.geoname_cache();
         let w_cache = self.weather_cache();
         let max_query_len = 2 * g_cache.max_name_length + w_cache.max_keyword_length + 10;
@@ -85,57 +85,7 @@ impl SuggestDao<'_> {
             return Ok(vec![]);
         }
 
-        let max_win_size =
-            std::cmp::max(g_cache.max_name_word_count, w_cache.max_keyword_word_count);
-        let kw = query.keyword.to_lowercase();
-        let paths = filter_map_chunks::<Token>(&kw, max_win_size, |chunk, chunk_index, path| {
-            // Match the chunk to a token type that hasn't already been matched
-            // in this path.
-            for tt in [
-                TokenType::City,
-                TokenType::Region,
-                TokenType::WeatherKeyword,
-            ] {
-                if !path.iter().any(|t| t.token_type() == tt) {
-                    let tokens = self.match_weather_tokens(tt, path, chunk, chunk_index == 0)?;
-                    if !tokens.is_empty() {
-                        // This chunk matches, so return the tokens to continue
-                        // down this path.
-                        return Ok(Some(tokens));
-                    }
-                }
-            }
-            // This chunk doesn't match. Return `None` to filter out the path.
-            Ok(None)
-        })?;
-
-        // `paths` contains all matching paths, and if a path has both a city
-        // and region, the city is in the region since we filtered out city-
-        // region mismatches above via `match_weather_tokens()`.
-        Ok(paths
-            .into_iter()
-            .filter_map(|path| {
-                let weather_kw = path.iter().find_map(|t| t.weather_keyword());
-                let city = path.iter().find_map(|t| t.city());
-                let region = path.iter().find_map(|t| t.region());
-                match (weather_kw, city, region) {
-                    (None, None, _) | (Some(_), None, Some(_)) => None,
-                    (Some(_), None, None) => Some(Suggestion::Weather {
-                        city: None,
-                        region: None,
-                        score: w_cache.score,
-                    }),
-                    (Some(_), Some(c), None)
-                    | (Some(_), Some(c), Some(_))
-                    | (None, Some(c), None)
-                    | (None, Some(c), Some(_)) => Some(Suggestion::Weather {
-                        city: Some(c.name.clone()),
-                        region: Some(c.admin1_code.clone()),
-                        score: w_cache.score,
-                    }),
-                }
-            })
-            .collect())
+        find_weather_suggestions(self, query, w_cache, g_cache)
     }
 
     fn match_weather_tokens(
@@ -310,6 +260,118 @@ impl SuggestDao<'_> {
 
             cache
         })
+    }
+}
+
+fn find_weather_suggestions(
+    dao: &SuggestDao,
+    query: &SuggestionQuery,
+    w_cache: &WeatherCache,
+    g_cache: &GeonameCache,
+) -> Result<Vec<Suggestion>> {
+    // Avoid doing work for strings that are so long they can't possibly match. The longest
+    // possible weather query is two geonames + one weather keyword + at least two spaces
+    // between those three components, say, 10 spaces total for some wiggle room. There's not
+    // much point in an analogous min length check since weather suggestions can be matched on
+    // city alone and many city names are only a few characters long ("nyc").
+
+    // Construct initial state
+    let mut state = WeatherTokenSearchState {
+        dao,
+        w_cache,
+        current_tokens: vec![],
+        results: vec![],
+        already_inserted: HashSet::new(),
+    };
+    // Make sure to lowercase the query for simpler lookups
+    let query = query.keyword.to_lowercase();
+    let max_win_size = std::cmp::max(g_cache.max_name_word_count, w_cache.max_keyword_word_count);
+
+    // Perform the search and return the results
+    state.search(ChunkedString::new(query, max_win_size).iter(), 0)?;
+    Ok(state.results)
+}
+
+/// Finding weather suggestions is tricky:
+///
+/// - A suggestion consists of multiple tokens (city, region, `weather`).
+///   - Tokens can be multiple words
+///   - Tokens can come in any order
+///   - Some tokens are optional, but only under certain circumstances.
+/// - A single string can match multiple tokens
+///   - "Waterloo" can be `Waterloo, IA` or `Waterloo, AL`
+///   - "New York" can be a city or state
+///
+/// To find weather suggestion, we perform a depth-first search through the query string,
+/// tokenizing it in different ways.  When we reach the end of the string and have a list of
+/// tokens, we then check if they can be combined to create a suggestion.
+///
+/// This struct store the state for that depth-first search.
+struct WeatherTokenSearchState<'a> {
+    dao: &'a SuggestDao<'a>,
+    w_cache: &'a WeatherCache,
+    /// List of tokens for the current node, this gets pushed/poped to as the search moves to child
+    /// nodes.
+    current_tokens: Vec<Token>,
+    /// List of suggestions we've found so far
+    results: Vec<Suggestion>,
+    /// Track geonames we've already inserted to avoid dupes
+    already_inserted: HashSet<Geoname>,
+}
+
+impl WeatherTokenSearchState<'_> {
+    fn search(&mut self, chunk_iter: ChunkedStringIter<'_>, depth: usize) -> Result<()> {
+        if chunk_iter.at_end() {
+            // At the end of the string.  Try to push a new Suggestion.
+            let weather_kw = self.current_tokens.iter().find_map(|t| t.weather_keyword());
+            let city = self.current_tokens.iter().find_map(|t| t.city());
+            let region = self.current_tokens.iter().find_map(|t| t.region());
+            match (weather_kw, city, region) {
+                (None, None, _) | (Some(_), None, Some(_)) => (),
+                (Some(_), None, None) => {
+                    self.results.push(Suggestion::Weather {
+                        city: None,
+                        region: None,
+                        score: self.w_cache.score,
+                    });
+                }
+                (_, Some(c), _) => {
+                    let not_added_yet = self.already_inserted.insert(c.clone());
+                    if not_added_yet {
+                        self.results.push(Suggestion::Weather {
+                            city: Some(c.name.clone()),
+                            region: Some(c.admin1_code.clone()),
+                            score: self.w_cache.score,
+                        });
+                    }
+                }
+            }
+        } else {
+            // In the middle of the string, find chunks, try to match them to token types that
+            // haven't already been matched, and continue on recursively.
+            for (chunk, child_iter) in chunk_iter {
+                for tt in [
+                    TokenType::City,
+                    TokenType::Region,
+                    TokenType::WeatherKeyword,
+                ] {
+                    if !self.current_tokens.iter().any(|t| t.token_type() == tt) {
+                        let tokens = self.dao.match_weather_tokens(
+                            tt,
+                            &self.current_tokens,
+                            chunk,
+                            depth == 0,
+                        )?;
+                        for token in tokens {
+                            self.current_tokens.push(token);
+                            self.search(child_iter.clone(), depth + 1)?;
+                            self.current_tokens.pop();
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -718,6 +780,22 @@ mod tests {
                 "new york new york weather",
                 vec![Suggestion::Weather {
                     city: Some("New York City".to_string()),
+                    region: Some("NY".to_string()),
+                    score: 0.24,
+                }],
+            ),
+            (
+                "rochester NY weather",
+                vec![Suggestion::Weather {
+                    city: Some("Rochester".to_string()),
+                    region: Some("NY".to_string()),
+                    score: 0.24,
+                }],
+            ),
+            (
+                "NY rochester weather",
+                vec![Suggestion::Weather {
+                    city: Some("Rochester".to_string()),
                     region: Some("NY".to_string()),
                     score: 0.24,
                 }],

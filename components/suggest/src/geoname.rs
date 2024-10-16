@@ -35,7 +35,7 @@ pub enum GeonameType {
 /// fields we don't need.
 ///
 /// [1] https://download.geonames.org/export/dump/readme.txt
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash, Eq)]
 pub struct Geoname {
     /// The `geonameid` straight from the geoname table.
     pub geoname_id: i64,
@@ -474,6 +474,17 @@ pub(crate) mod tests {
                         "admin1_code": "NY",
                         "population": 19274244,
                         "alternate_names": ["ny", "new york"],
+                    },
+                    // Rochester NY
+                    {
+                        "id": 8,
+                        "name": "Rochester",
+                        "feature_class": "P",
+                        "feature_code": "PPL",
+                        "country_code": "US",
+                        "admin1_code": "NY",
+                        "population": 211328,
+                        "alternate_names": ["rochester"],
                     },
                 ],
             }),
