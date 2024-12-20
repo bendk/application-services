@@ -191,24 +191,9 @@ impl SuggestStore {
     }
 
     /// Queries the database for suggestions.
-    pub fn set_relevancy_store(&self, store: Arc<RelevancyStore>) {
-        // TODO: remove unwrap
-        store
-            .bandit_init(
-                "suggest".to_string(),
-                &[
-                    "amp".to_string(),
-                    "pocket".to_string(),
-                    "wikipedia".to_string(),
-                    "amo".to_string(),
-                    "yelp".to_string(),
-                    "mdn".to_string(),
-                    "fakespot".to_string(),
-                    "weather".to_string(),
-                ],
-            )
-            .unwrap();
-        *self.inner.relevancy_store.lock() = Some(store)
+    #[handle_error(Error)]
+    pub fn set_relevancy_store(&self, store: Arc<RelevancyStore>) -> SuggestApiResult<()> {
+        self.inner.set_relevancy_store(store)
     }
 
     /// Queries the database for suggestions.
@@ -440,6 +425,26 @@ impl<S> SuggestStoreInner<S> {
         }
     }
 
+    /// Queries the database for suggestions.
+    pub fn set_relevancy_store(&self, store: Arc<RelevancyStore>) -> Result<()> {
+        store
+            .bandit_init(
+                "suggest".to_string(),
+                &[
+                    "amp".to_string(),
+                    "pocket".to_string(),
+                    "wikipedia".to_string(),
+                    "amo".to_string(),
+                    "yelp".to_string(),
+                    "mdn".to_string(),
+                    "fakespot".to_string(),
+                    "weather".to_string(),
+                ],
+            )?;
+        *self.relevancy_store.lock() = Some(store);
+        Ok(())
+    }
+
     /// Returns this store's database connections, initializing them if
     /// they're not already open.
     fn dbs(&self) -> Result<&SuggestStoreDbs> {
@@ -482,13 +487,11 @@ impl<S> SuggestStoreInner<S> {
                 .map(|s| (s.name(), s))
                 .filter(|(name, _)| name != "exposure")
                 .collect();
-            // TODO: remove unwrap()
             let choice = relevancy_store
                 .bandit_select(
                     "suggest".to_string(),
                     &suggestion_map.keys().cloned().collect::<Vec<_>>(),
-                )
-                .unwrap();
+                )?;
             suggestion_map
                 .get_mut(&choice)
                 .expect("we know the key is present")
@@ -512,7 +515,6 @@ impl<S> SuggestStoreInner<S> {
     pub fn handle_sugestion_action(&self, suggestion_type: String, selected: bool) -> Result<()> {
         let mut relevancy_store = self.relevancy_store.lock();
         if let Some(relevancy_store) = &mut *relevancy_store {
-            // TODO: remove unwrap
             relevancy_store.bandit_update("suggest".to_string(), suggestion_type, selected)?;
         }
         Ok(())
