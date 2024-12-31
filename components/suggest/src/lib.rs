@@ -18,6 +18,7 @@ mod rs;
 mod schema;
 mod store;
 mod suggestion;
+mod taskqueue;
 #[cfg(test)]
 mod testing;
 pub mod util;

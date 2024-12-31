@@ -28,6 +28,7 @@ use crate::{
         SuggestAttachment, SuggestRecord, SuggestRecordId, SuggestRecordType,
     },
     suggestion::AmpSuggestionType,
+    taskqueue::{run_in_background, WorkerQueue},
     QueryWithMetricsResult, Result, SuggestApiResult, Suggestion, SuggestionQuery,
 };
 
@@ -113,6 +114,27 @@ impl SuggestStoreBuilder {
         )?;
 
         Ok(Arc::new(SuggestStore {
+            inner: SuggestStoreInner::new(data_path, extensions_to_load, client),
+        }))
+    }
+
+    #[handle_error(Error)]
+    pub fn build_async(&self, worker_queue: Arc<dyn WorkerQueue>) -> SuggestApiResult<Arc<SuggestStoreAsync>> {
+        let inner = self.0.lock();
+        let extensions_to_load = inner.extensions_to_load.clone();
+        let data_path = inner
+            .data_path
+            .clone()
+            .ok_or_else(|| Error::SuggestStoreBuilder("data_path not specified".to_owned()))?;
+
+        let client = RemoteSettingsClient::new(
+            inner.remote_settings_server.clone(),
+            inner.remote_settings_bucket_name.clone(),
+            None,
+        )?;
+
+        Ok(Arc::new(SuggestStoreAsync {
+            worker_queue,
             inner: SuggestStoreInner::new(data_path, extensions_to_load, client),
         }))
     }
@@ -309,6 +331,144 @@ impl SuggestStore {
     /// https://sqlite.org/pragma.html#pragma_wal_checkpoint
     pub fn checkpoint(&self) {
         self.inner.checkpoint();
+    }
+}
+
+/// Suggest store where all the methods are async
+///
+/// This duplicates the functionality from [SuggestStore], but exposes it as async methods.
+/// The plan is to migrate consumers over to this interface, then remove the old one.
+#[derive(uniffi::Object)]
+pub struct SuggestStoreAsync {
+    worker_queue: Arc<dyn WorkerQueue>,
+    inner: SuggestStoreInner<RemoteSettingsClient>,
+}
+
+impl SuggestStoreAsync {
+    async fn wrap_method_call<T, F>(self: Arc<Self>, f: F) -> SuggestApiResult<T>
+    where
+        F: FnOnce(&SuggestStoreInner<RemoteSettingsClient>) -> Result<T>,
+        F: Send + Sync + 'static,
+        T: Send + Sync + 'static,
+    {
+        run_in_background(self.worker_queue.clone(), move || f(&self.inner))
+            .await
+            .map_err(::error_support::convert_log_report_error)
+    }
+}
+#[uniffi::export]
+impl SuggestStoreAsync {
+    pub async fn query(
+        self: Arc<Self>,
+        query: SuggestionQuery,
+    ) -> SuggestApiResult<Vec<Suggestion>> {
+        self.wrap_method_call(move |inner| Ok(inner.query(query)?.suggestions))
+            .await
+    }
+
+    /// Queries the database for suggestions.
+    pub async fn query_with_metrics(
+        self: Arc<Self>,
+        query: SuggestionQuery,
+    ) -> SuggestApiResult<QueryWithMetricsResult> {
+        self.wrap_method_call(move |inner| inner.query(query)).await
+    }
+
+    /// Dismiss a suggestion
+    ///
+    /// Dismissed suggestions will not be returned again
+    ///
+    /// In the case of AMP suggestions this should be the raw URL.
+    pub async fn dismiss_suggestion(
+        self: Arc<Self>,
+        suggestion_url: String,
+    ) -> SuggestApiResult<()> {
+        self.wrap_method_call(move |inner| inner.dismiss_suggestion(suggestion_url))
+            .await
+    }
+
+    /// Clear dismissed suggestions
+    pub async fn clear_dismissed_suggestions(self: Arc<Self>) -> SuggestApiResult<()> {
+        self.wrap_method_call(|inner| inner.clear_dismissed_suggestions())
+            .await
+    }
+
+    /// Interrupts any ongoing queries.
+    ///
+    /// This should be called when the user types new input into the address
+    /// bar, to ensure that they see fresh suggestions as they type. This
+    /// method does not interrupt any ongoing ingests.
+    ///
+    /// Note: this method is not async, since the goal is to preempt currently running async
+    /// operations.
+    #[uniffi::method(default(kind = None))]
+    pub fn interrupt(self: Arc<Self>, kind: Option<InterruptKind>) {
+        self.inner.interrupt(kind)
+    }
+
+    /// Ingests new suggestions from Remote Settings.
+    pub async fn ingest(
+        self: Arc<Self>,
+        constraints: SuggestIngestionConstraints,
+    ) -> SuggestApiResult<SuggestIngestionMetrics> {
+        self.wrap_method_call(move |inner| inner.ingest(constraints))
+            .await
+    }
+
+    /// Removes all content from the database.
+    pub async fn clear(self: Arc<Self>) -> SuggestApiResult<()> {
+        self.wrap_method_call(move |inner| inner.clear()).await
+    }
+
+    /// Returns global Suggest configuration data.
+    pub async fn fetch_global_config(self: Arc<Self>) -> SuggestApiResult<SuggestGlobalConfig> {
+        self.wrap_method_call(move |inner| inner.fetch_global_config())
+            .await
+    }
+
+    /// Returns per-provider Suggest configuration data.
+    pub async fn fetch_provider_config(
+        self: Arc<Self>,
+        provider: SuggestionProvider,
+    ) -> SuggestApiResult<Option<SuggestProviderConfig>> {
+        self.wrap_method_call(move |inner| inner.fetch_provider_config(provider))
+            .await
+    }
+
+    /// Fetches geonames stored in the database. A geoname represents a
+    /// geographic place.
+    ///
+    /// `query` is a string that will be matched directly against geoname names.
+    /// It is not a query string in the usual Suggest sense. `match_name_prefix`
+    /// determines whether prefix matching is performed on names excluding
+    /// abbreviations and airport codes. When `true`, names that start with
+    /// `query` will match. When false, names that equal `query` will match.
+    ///
+    /// `geoname_type` restricts returned geonames to a [`GeonameType`].
+    ///
+    /// `filter` restricts returned geonames to certain cities or regions.
+    /// Cities can be restricted to regions by including the regions in
+    /// `filter`, and regions can be restricted to those containing certain
+    /// cities by including the cities in `filter`. This is especially useful
+    /// since city and region names are not unique. `filter` is disjunctive: If
+    /// any item in `filter` matches a geoname, the geoname will be filtered in.
+    ///
+    /// The query can match a single geoname in more than one way. For example,
+    /// it can match both a full name and an abbreviation. The returned vec of
+    /// [`GeonameMatch`] values will include all matches for a geoname, one
+    /// match per `match_type` per geoname. In other words, a matched geoname
+    /// can map to more than one `GeonameMatch`.
+    pub async fn fetch_geonames(
+        self: Arc<Self>,
+        query: String,
+        match_name_prefix: bool,
+        geoname_type: Option<GeonameType>,
+        filter: Option<Vec<Geoname>>,
+    ) -> SuggestApiResult<Vec<GeonameMatch>> {
+        self.wrap_method_call(move |inner| {
+            inner.fetch_geonames(&query, match_name_prefix, geoname_type, filter)
+        })
+        .await
     }
 }
 

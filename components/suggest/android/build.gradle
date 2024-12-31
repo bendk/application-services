@@ -7,6 +7,8 @@ android {
 
 dependencies {
     api project(":remotesettings")
+
+    implementation libs.kotlinx.coroutines
 }
 
 ext.configureUniFFIBindgen("suggest")
