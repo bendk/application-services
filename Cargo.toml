@@ -59,7 +59,7 @@ members = [
     "examples/*/",
     "testing/separated/*/",
     "testing/sync-test",
-    "components/support/firefox-versioning",
+    "components/support/firefox-versioning", "components/context_id",
 ]
 
 exclude = [
