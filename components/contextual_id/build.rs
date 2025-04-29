@@ -4,5 +4,5 @@
  */
 
 fn main() {
-    uniffi::generate_scaffolding("./src/context_id.udl").unwrap();
+    uniffi::generate_scaffolding("./src/contextual_id.udl").unwrap();
 }
