@@ -8,7 +8,7 @@ mod send_tab;
 use std::fs;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use cli_support::fxa_creds;
+use cli_support::{fxa_creds, init_logging_with};
 use fxa_client::{FirefoxAccount, FxaConfig, FxaServer};
 
 static CREDENTIALS_FILENAME: &str = "credentials.json";
@@ -71,11 +71,11 @@ fn main() -> Result<()> {
     viaduct_dev::use_dev_backend();
     if cli.log {
         if cli.debug {
-            simple_logger::init_with_level(log::Level::Debug).unwrap();
+            init_logging_with("debug");
         } else if cli.info {
-            simple_logger::init_with_level(log::Level::Info).unwrap();
+            init_logging_with("info");
         } else {
-            simple_logger::init_with_level(log::Level::Warn).unwrap();
+            init_logging_with("warn");
         }
     }
 
