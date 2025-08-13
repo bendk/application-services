@@ -12,6 +12,7 @@ use std::os::raw::c_char;
 pub use autofill;
 pub use crashtest;
 pub use error_support;
+pub use fairy_bridge;
 pub use fxa_client;
 pub use init_rust_components;
 pub use logins;

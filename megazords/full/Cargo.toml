@@ -19,6 +19,7 @@ places = { path = "../../components/places" }
 push = { path = "../../components/push" }
 remote_settings = { path = "../../components/remote_settings" }
 rust-log-forwarder = { path = "../../components/support/rust-log-forwarder" }
+fairy-bridge = { path = "../../components/fairy-bridge" }
 viaduct = { path = "../../components/viaduct" }
 nimbus-sdk = { path = "../../components/nimbus" }
 autofill = { path = "../../components/autofill" }

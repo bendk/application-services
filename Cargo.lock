@@ -2703,6 +2703,7 @@ dependencies = [
  "autofill",
  "crashtest",
  "error-support",
+ "fairy-bridge",
  "fxa-client",
  "init_rust_components",
  "lazy_static",
