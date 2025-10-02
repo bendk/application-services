@@ -3046,6 +3046,7 @@ dependencies = [
  "error-support",
  "nss_sys",
  "once_cell",
+ "paste",
  "serde",
  "serde_derive",
  "thiserror 2.0.3",

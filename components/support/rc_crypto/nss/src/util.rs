@@ -196,12 +196,21 @@ macro_rules! scoped_ptr {
             ptr: *mut $target,
         }
 
+        #[cfg(test)]
+        paste::paste! {
+            static [< $scoped:upper _ REF_COUNT >]: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        }
+
         impl $crate::util::ScopedPtr for $scoped {
             type RawType = $target;
 
             #[allow(dead_code)]
             unsafe fn from_ptr(ptr: *mut $target) -> $crate::error::Result<$scoped> {
                 if !ptr.is_null() {
+                    #[cfg(test)]
+                    paste::paste! {
+                        [<  $scoped:upper _ REF_COUNT >].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     Ok($scoped { ptr })
                 } else {
                     Err($crate::error::ErrorKind::InternalError.into())
@@ -219,10 +228,23 @@ macro_rules! scoped_ptr {
             }
         }
 
+        #[cfg(test)]
+        impl $scoped {
+            pub fn ref_count() -> usize {
+                paste::paste! {
+                    [<  $scoped:upper _ REF_COUNT >].load(std::sync::atomic::Ordering::Relaxed)
+                }
+            }
+        }
+
         impl Drop for $scoped {
             fn drop(&mut self) {
                 assert!(!self.ptr.is_null());
                 unsafe { $dtor(self.ptr) };
+                #[cfg(test)]
+                paste::paste! {
+                    [<  $scoped:upper _ REF_COUNT >].fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         }
     };

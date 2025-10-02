@@ -275,3 +275,32 @@ fn import_and_persist_sym_key(
         ))
     }
 }
+
+#[cfg(feature="keydb")]
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_aes_key_refcount_with_new_keys() {
+        crate::ensure_initialized();
+        // call get_or_create_aes256_key a bunch of times, we don't care about the return values
+        get_or_create_aes256_key("test").unwrap();
+        get_or_create_aes256_key("test2").unwrap();
+        get_or_create_aes256_key("test3").unwrap();
+        // Make sure we've freed all returned pointers
+        assert_eq!(0, SymKey::ref_count())
+    }
+
+    #[test]
+    fn test_aes_key_refcount_with_reused_keys() {
+        crate::ensure_initialized();
+        // call get_or_create_aes256_key a bunch of times, we don't care about the return values
+        get_or_create_aes256_key("test").unwrap();
+        get_or_create_aes256_key("test").unwrap();
+        get_or_create_aes256_key("test").unwrap();
+        // Make sure we've freed all returned pointers
+        assert_eq!(0, SymKey::ref_count())
+    }
+}
+

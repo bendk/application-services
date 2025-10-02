@@ -17,6 +17,9 @@ serde = "1"
 serde_derive = "1"
 once_cell = { version = "1.20.2", optional = true }
 
+[dev-dependencies]
+paste = "1"
+
 [features]
 default = []
 gecko = ["nss_sys/gecko"]
