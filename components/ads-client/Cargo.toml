@@ -23,7 +23,7 @@ serde = "1"
 serde_json = "1"
 thiserror = "2"
 once_cell = "1.5"
-uniffi = { version = "0.29.0" }
+uniffi = { git = "https://github.com/mozilla/uniffi-rs.git", branch = "main" }
 url = { version = "2", features = ["serde"] }
 uuid = { version = "1.3", features = ["v4"] }
 viaduct = { path = "../viaduct" }
@@ -36,4 +36,4 @@ viaduct-dev = { path = "../support/viaduct-dev" }
 viaduct-reqwest = { path = "../support/viaduct-reqwest" }
 
 [build-dependencies]
-uniffi = { version = "0.29.0", features = ["build"] }
+uniffi = { git = "https://github.com/mozilla/uniffi-rs.git", branch = "main", features = ["build"] }
