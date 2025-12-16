@@ -14,6 +14,7 @@ use url::Url;
 
 // This crate awkardly uses some internal implementation details of the fxa-client crate,
 // because we haven't worked on exposing those test-only features via UniFFI.
+use error_support::{info, warn};
 use fxa_client::{AccessTokenInfo, FirefoxAccount, FxaConfig, FxaError};
 use sync15::client::Sync15StorageClientInit;
 use sync15::KeyBundle;
@@ -26,6 +27,7 @@ const CLIENT_ID: &str = "3c49430b43dfba77";
 const REDIRECT_URI: &str = "https://accounts.firefox.com/oauth/success/3c49430b43dfba77";
 pub const SYNC_SCOPE: &str = "https://identity.mozilla.com/apps/oldsync";
 pub const SESSION_SCOPE: &str = "https://identity.mozilla.com/tokens/session";
+pub const PROFILE_SCOPE: &str = "profile";
 
 fn load_fxa_creds(path: &str) -> Result<FirefoxAccount> {
     let mut file = fs::File::open(path)?;
@@ -35,14 +37,13 @@ fn load_fxa_creds(path: &str) -> Result<FirefoxAccount> {
 }
 
 fn load_or_create_fxa_creds(path: &str, cfg: FxaConfig, scopes: &[&str]) -> Result<FirefoxAccount> {
-    load_fxa_creds(path).or_else(|e| {
-        log::info!(
-            "Failed to load existing FxA credentials from {:?} (error: {}), launching OAuth flow",
-            path,
-            e
-        );
-        create_fxa_creds(path, cfg, scopes)
-    })
+    if !std::fs::exists(path)? {
+        info!("Creating new FxA account in {path}");
+        return create_fxa_creds(path, cfg, scopes);
+    };
+
+    info!("Loading existing FxA account from {path}");
+    load_fxa_creds(path)
 }
 
 fn create_fxa_creds(path: &str, cfg: FxaConfig, scopes: &[&str]) -> Result<FirefoxAccount> {
@@ -55,7 +56,7 @@ fn handle_oauth_flow(path: &str, acct: &FirefoxAccount, scopes: &[&str]) -> Resu
     let oauth_uri = acct.begin_oauth_flow(scopes, "fxa_creds")?;
 
     if open::that(&oauth_uri).is_err() {
-        log::warn!("Failed to open a web browser D:");
+        warn!("Failed to open a web browser D:");
         println!("Please visit this URL, sign in, and then copy-paste the final URL below.");
         println!("\n    {}\n", oauth_uri);
     } else {

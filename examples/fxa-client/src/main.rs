@@ -9,6 +9,7 @@ use std::fs;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use cli_support::{fxa_creds, init_logging_with};
+use error_support::{debug, error};
 use fxa_client::{FirefoxAccount, FxaConfig, FxaServer};
 
 static CREDENTIALS_FILENAME: &str = "credentials.json";
@@ -28,13 +29,9 @@ struct Cli {
     #[clap(long, short, action)]
     session_scope: bool,
 
-    /// Print out log to the console.  The default level is WARN
+    /// Request a profile scope
     #[clap(long, short, action)]
-    log: bool,
-
-    /// Set the logging level to INFO
-    #[clap(long, short, action)]
-    info: bool,
+    profile_scope: bool,
 
     /// Set the logging level to DEBUG
     #[clap(long, short, action)]
@@ -60,8 +57,13 @@ enum Server {
 
 #[derive(Subcommand)]
 enum Command {
+    // Get a list of devices
     Devices(devices::DeviceArgs),
+    // Send a tab
     SendTab(send_tab::SendTabArgs),
+    // Load the account, check scopes and return
+    Load,
+    // Disconnect the example client
     Disconnect,
 }
 
@@ -69,27 +71,39 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     nss::ensure_initialized();
     viaduct_hyper::init_backend_hyper()?;
-    if cli.log {
-        if cli.debug {
-            init_logging_with("fxa_client=debug");
-        } else if cli.info {
-            init_logging_with("fxa_client=info");
-        } else {
-            init_logging_with("fxa_client=warn");
-        }
+    if cli.debug {
+        init_logging_with(
+            "examples_fxa_client=debug,fxa_client=debug,cli_support::fxa_creds=debug",
+        );
+    } else {
+        init_logging_with("examples_fxa_client=info,fxa_client=info,cli_support::fxa_creds=info");
     }
 
-    let scopes: &[&str] = if cli.session_scope {
-        &[fxa_creds::SYNC_SCOPE, fxa_creds::SESSION_SCOPE]
-    } else {
-        &[fxa_creds::SYNC_SCOPE]
-    };
+    let mut scopes = vec![fxa_creds::SYNC_SCOPE];
+
+    if cli.session_scope {
+        scopes.push(fxa_creds::SESSION_SCOPE)
+    }
+
+    if cli.profile_scope {
+        scopes.push(fxa_creds::PROFILE_SCOPE);
+    }
 
     println!();
-    let account = load_account(&cli, scopes)?;
+    let account = load_account(&cli, &scopes)?;
+    for scope in scopes {
+        match account.get_access_token(scope, None) {
+            Ok(_) => debug!("Successfully fetched access token for {scope}"),
+            Err(e) => {
+                error!("Failed to load access token for {scope}");
+                return Err(e.into());
+            }
+        }
+    }
     match cli.command {
         Command::Devices(args) => devices::run(&account, args),
         Command::SendTab(args) => send_tab::run(&account, args),
+        Command::Load => Ok(()),
         Command::Disconnect => {
             account.disconnect();
             Ok(())

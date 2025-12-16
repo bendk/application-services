@@ -14,7 +14,7 @@ path = "src/places-utils.rs"
 places = { path = "../../components/places" }
 sync-guid = { path = "../../components/support/guid" }
 types = { path = "../../components/support/types" }
-error-support = { path = "../../components/support/error" }
+error-support = { path = "../../components/support/error", features = ["tracing-logging"] }
 interrupt-support = { path = "../../components/support/interrupt" }
 nss = { path = "../../components/support/rc_crypto/nss" }
 sql-support = { path = "../../components/support/sql", features = ["debug-tools"] }

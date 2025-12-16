@@ -3,6 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 use std::io::{self, Write};
 
+use error_support::warn;
+
 pub fn prompt_string<S: AsRef<str>>(prompt: S) -> Option<String> {
     print!("{}: ", prompt.as_ref());
     let _ = io::stdout().flush(); // Don't care if flush fails really.
@@ -30,7 +32,7 @@ pub fn prompt_password<S: AsRef<str>>(prompt: S) -> Option<String> {
     match result {
         Ok(p) => Some(p),
         Err(e) => {
-            log::warn!("Error getting password: {e}");
+            warn!("Error getting password: {e}");
             None
         }
     }
