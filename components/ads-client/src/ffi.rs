@@ -19,7 +19,7 @@ use crate::http_cache::{CacheMode, RequestCachePolicy};
 use crate::MozAdsClient;
 use error_support::{ErrorHandling, GetErrorHandling};
 use parking_lot::Mutex;
-use url::Url;
+use crate::AdsClientUrl;
 
 pub type AdsClientApiResult<T> = std::result::Result<T, MozAdsClientApiError>;
 
@@ -86,9 +86,9 @@ pub struct MozAdsPlacementRequestWithCount {
 
 #[derive(Debug, PartialEq, uniffi::Record)]
 pub struct MozAdsCallbacks {
-    pub click: Url,
-    pub impression: Url,
-    pub report: Option<Url>,
+    pub click: AdsClientUrl,
+    pub impression: AdsClientUrl,
+    pub report: Option<AdsClientUrl>,
 }
 
 #[derive(uniffi::Object)]

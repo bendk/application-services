@@ -5,3 +5,4 @@ omit_checksums = true
 [bindings.swift]
 ffi_module_name = "MozillaRustComponents"
 ffi_module_filename = "ads_clientFFI"
+omit_checksums = true

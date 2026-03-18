@@ -152,7 +152,7 @@ pub struct TracingEvent {
     pub target: String,
     pub name: String,
     pub message: String,
-    pub fields: serde_json::Value,
+    pub fields: TracingJsonValue,
 }
 
 #[uniffi::export(callback_interface)]
