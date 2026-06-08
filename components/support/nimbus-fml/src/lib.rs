@@ -24,3 +24,30 @@ cfg_if::cfg_if! {
 pub mod fixtures;
 
 const SUPPORT_URL_LOADING: bool = true;
+
+#[cfg(feature = "uniffi-bindings")]
+uniffi::custom_type!(JsonObject, String, {
+    remote,
+    try_lift: |val| {
+        let json: serde_json::Value = serde_json::from_str(&val)?;
+
+        match json.as_object() {
+            Some(obj) => Ok(obj.to_owned()),
+            _ => Err(uniffi::deps::anyhow::anyhow!(
+                "Unexpected JSON-non-object in the bagging area"
+            )),
+        }
+    },
+    lower: |obj| serde_json::Value::Object(obj).to_string(),
+});
+
+#[cfg(feature = "uniffi-bindings")]
+uniffi::custom_type!(Url, String, {
+    remote,
+    try_lift: |val| Ok(Self::from_str(&val)?),
+    lower: |obj| obj.as_str().to_string(),
+});
+
+#[cfg(feature = "uniffi-bindings")]
+uniffi::include_scaffolding!("fml");
+
