@@ -53,6 +53,12 @@ impl FirefoxAccount {
     /// Extracts the session token from a WebChannel password change JSON payload, exchanges it
     /// for a new refresh token.
     pub fn handle_web_channel_password_change(&mut self, json_payload: &str) -> Result<()> {
+        self.with_network_retry("handle_web_channel_password_change", |s| {
+            s._handle_web_channel_password_change(json_payload)
+        })
+    }
+
+    fn _handle_web_channel_password_change(&mut self, json_payload: &str) -> Result<()> {
         let data: serde_json::Value = serde_json::from_str(json_payload)?;
         let token = data
             .get("sessionToken")
@@ -119,6 +125,12 @@ impl FirefoxAccount {
 
     /// Check whether user is authorized using our refresh token.
     pub fn check_authorization_status(&mut self) -> Result<IntrospectInfo> {
+        self.with_network_retry("check_authorization_status", |s| {
+            s._check_authorization_status()
+        })
+    }
+
+    fn _check_authorization_status(&mut self) -> Result<IntrospectInfo> {
         let resp = match self.state.refresh_token() {
             Some(refresh_token) => {
                 if refresh_token.scopes.contains(scopes::OLD_SYNC)
@@ -151,6 +163,19 @@ impl FirefoxAccount {
         scopes: &[&str],
         entrypoint: &str,
     ) -> Result<String> {
+        self.with_network_retry("begin_pairing_flow", |s| {
+            s._begin_pairing_flow(pairing_url, service, scopes, entrypoint)
+        })
+    }
+
+    fn _begin_pairing_flow(
+        &mut self,
+        pairing_url: &str,
+        service: &str,
+        scopes: &[&str],
+        entrypoint: &str,
+    ) -> Result<String> {
+        self.cancel_existing_oauth_flows();
         let mut url = self.state.config().pair_supp_url()?;
         url.query_pairs_mut().append_pair("entrypoint", entrypoint);
         if !service.is_empty() {
@@ -188,6 +213,18 @@ impl FirefoxAccount {
         scopes: &[&str],
         entrypoint: &str,
     ) -> Result<String> {
+        self.with_network_retry("begin_oauth_flow", |s| {
+            s._begin_oauth_flow(service, scopes, entrypoint)
+        })
+    }
+
+    fn _begin_oauth_flow(
+        &mut self,
+        service: &str,
+        scopes: &[&str],
+        entrypoint: &str,
+    ) -> Result<String> {
+        self.cancel_existing_oauth_flows();
         let needs_reauth =
             self.state.last_seen_profile().is_some() && self.state.session_token().is_none();
         let mut url = if needs_reauth {
@@ -345,6 +382,12 @@ impl FirefoxAccount {
     ///
     /// **💾 This method alters the persisted account state.**
     pub fn complete_oauth_flow(&mut self, code: &str, state: &str) -> Result<()> {
+        self.with_network_retry("complete_oauth_flow", |s| {
+            s._complete_oauth_flow(code, state)
+        })
+    }
+
+    fn _complete_oauth_flow(&mut self, code: &str, state: &str) -> Result<()> {
         self.clear_access_token_cache();
         let oauth_flow = match self.state.pop_oauth_flow(state) {
             Some(oauth_flow) => oauth_flow,
