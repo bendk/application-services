@@ -169,3 +169,8 @@ mozilla-central-workspace-hack = { path = "monorepo-hacks/workspace-hack" }
 mozbuild = { path = "monorepo-hacks/mozbuild" }
 # temporary ohttp override enabling the above hacks while we wait for a new version.
 ohttp = { git = "https://github.com/martinthomson/ohttp", rev = "324f876e79394c9b815dcacda3fd4f48f105fdf2" }
+uniffi = { git = "https://github.com/bendk/uniffi-rs.git", rev = "8a00ca252843ffc46bcdebf7ec29105f6e7b255f" }
+uniffi_bindgen = { git = "https://github.com/bendk/uniffi-rs.git", rev = "8a00ca252843ffc46bcdebf7ec29105f6e7b255f" }
+uniffi_pipeline = { git = "https://github.com/bendk/uniffi-rs.git", rev = "8a00ca252843ffc46bcdebf7ec29105f6e7b255f" }
+uniffi_internal_macros = { git = "https://github.com/bendk/uniffi-rs.git", rev = "8a00ca252843ffc46bcdebf7ec29105f6e7b255f" }
+uniffi-bindgen-kotlin-jni = { git = "https://github.com/bendk/uniffi-rs.git", rev = "8a00ca252843ffc46bcdebf7ec29105f6e7b255f" }
