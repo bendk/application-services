@@ -189,7 +189,12 @@ fn overview_panel(
 
     let column_name = metric.column_name();
     let all_engines = all_engines(config);
-    let all_engine_literals: Vec<String> = all_engines.iter().map(|e| format!("'{e}'")).collect();
+    let engine_matches: Vec<String> = config.components.iter()
+        .flat_map(|c| c.sync_engines().iter().map(|e| (c.slug(), e.to_string())))
+        .map(|(component, engine)| {
+            format!("(engine_name = '{engine}' AND '{component}' IN (SELECT * FROM UNNEST(SPLIT('${{components:csv}}', ','))))")
+        })
+        .collect();
 
     let query = Query {
         select: vec![
@@ -207,7 +212,7 @@ fn overview_panel(
                 Application::Android => "application = 'firefox-android'",
             }
             .into(),
-            format!("engine_name IN ({})", all_engine_literals.join(", ")),
+            engine_matches.join(" OR "),
         ],
         order_by: Some("time".into()),
         ..Query::default()
