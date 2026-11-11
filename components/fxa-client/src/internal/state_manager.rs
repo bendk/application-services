@@ -106,7 +106,7 @@ impl StateManager {
         false
     }
 
-    pub fn reset_auth_recheck_timer(&mut self) {
+    pub fn set_auth_recheck_timer_to_now(&mut self) {
         // Attempt to reset the timer that indicates how long until we recheck the auth issues
         if let Ok(now) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
             self.persisted_state.last_auth_check_time = Some(now.as_secs());

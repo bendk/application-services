@@ -9,7 +9,7 @@
 
 use crate::{Error, FxaEvent, FxaState};
 
-use super::helpers::{AccountWrapper, ResultExt, StateMachineErr};
+use super::helpers::{AccountWrapper, AuthStatus, ResultExt, StateMachineErr};
 
 /// Transition the FSM from `from` given `event`.
 pub fn transition(
@@ -29,9 +29,8 @@ pub fn transition(
                 // older browser version that we've since fixed or an FxA server bug.
                 // Because of this, we will recheck the authorization status from time to time.
                 if account.should_recheck_auth() {
-                    account.reset_auth_recheck_timer();
                     match account.check_authorization_status() {
-                        Ok(true) => {
+                        AuthStatus::Valid => {
                             error_support::report_error!(
                                 "fxaclient-authissues-recheck-succeeded",
                                 "Recheck of auth status succeeded despite being in AuthIssues state"
@@ -50,10 +49,7 @@ pub fn transition(
                 // upgraded Firefox.
                 account
                     .finish_initialize(&device_config.capabilities)
-                    .to_state_machine_err(|| {
-                        account.reset_auth_recheck_timer();
-                        S::Connected
-                    })?;
+                    .to_state_machine_err(|| S::Connected)?;
                 Ok(S::Connected)
             }
             state => Ok(state),
@@ -170,41 +166,16 @@ pub fn transition(
             Ok(S::Disconnected)
         }
         (S::Connected, E::CheckAuthorizationStatus) => {
-            // check_authorization_status() failing should leave us in the original state.
-            #[cfg(not(target_os = "ios"))]
-            let active = match account.check_authorization_status() {
-                Ok(active) => active,
-                // Missing a refresh/session token means this check failed
-                // https://bugzilla.mozilla.org/show_bug.cgi?id=2084260
-                Err(Error::NoRefreshToken) | Err(Error::NoSessionToken) => false,
-                // Any other error means this check was inconclusive.
-                // Keep the user in the `Connected` state.
-                Err(e) => {
-                    return Err(StateMachineErr::Handled {
-                        cause: Box::new(e),
-                        target: S::Connected,
-                    })
-                }
-            };
-
-            // However, this isn't working properly on iOS.
-            // Let's revert for now.
-            // https://bugzilla.mozilla.org/show_bug.cgi?id=2084252
-            #[cfg(target_os = "ios")]
-            let active = account
-                .check_authorization_status()
-                .to_state_machine_err(|| S::AuthIssues)?;
-
-            if active {
-                Ok(S::Connected)
-            } else {
-                account.reset_auth_recheck_timer();
-                Ok(S::AuthIssues)
+            match account.check_authorization_status() {
+                AuthStatus::Valid => Ok(S::Connected),
+                AuthStatus::Invalid => Ok(S::AuthIssues),
+                // Stay in `Connected` if we didn't receive a definitive result that our
+                // authorization status was bad
+                AuthStatus::Unknown => Ok(S::Connected),
             }
         }
         (S::Connected, E::CallGetProfile) => {
             account.get_profile().to_state_machine_err(|| {
-                account.reset_auth_recheck_timer();
                 // This is called from the debug menu for debugging auth issues
                 // If this fails, assume it's because of a bad refresh token.
                 S::AuthIssues
@@ -236,10 +207,7 @@ pub fn transition(
             // the device record (push subscription, commands, etc) against the new token.
             account
                 .handle_web_channel_password_change(&json_payload)
-                .to_state_machine_err(|| {
-                    account.reset_auth_recheck_timer();
-                    S::AuthIssues
-                })?;
+                .to_state_machine_err(|| S::AuthIssues)?;
             Ok(S::Connected)
         }
 
@@ -255,10 +223,7 @@ pub fn transition(
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
             let oauth_url = account
                 .begin_oauth_flow(&service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| {
-                    account.reset_auth_recheck_timer();
-                    S::AuthIssues
-                })?;
+                .to_state_machine_err(|| S::AuthIssues)?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state: Box::new(FxaState::AuthIssues),
@@ -273,21 +238,14 @@ pub fn transition(
             // session token recovers us; device re-registration will be handled inside the inner call.
             account
                 .handle_web_channel_password_change(&json_payload)
-                .to_state_machine_err(|| {
-                    account.reset_auth_recheck_timer();
-                    S::AuthIssues
-                })?;
+                .to_state_machine_err(|| S::AuthIssues)?;
             Ok(S::Connected)
         }
         (S::AuthIssues, E::CheckAuthorizationStatus) => {
-            let active = account
-                .check_authorization_status()
-                .to_state_machine_err(|| S::AuthIssues)?;
-            if active {
-                Ok(S::Connected)
-            } else {
-                account.reset_auth_recheck_timer();
-                Ok(S::AuthIssues)
+            match account.check_authorization_status() {
+                AuthStatus::Valid => Ok(S::Connected),
+                AuthStatus::Invalid => Ok(S::AuthIssues),
+                AuthStatus::Unknown => Ok(S::AuthIssues),
             }
         }
 

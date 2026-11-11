@@ -287,8 +287,8 @@ impl FirefoxAccount {
     /// Set the last time we re-checked our authentication after a failure to the current time.
     ///
     /// **💾 This method alters the persisted account state.**
-    pub fn reset_auth_recheck_timer(&mut self) {
-        self.state.reset_auth_recheck_timer();
+    pub fn set_auth_recheck_timer_to_now(&mut self) {
+        self.state.set_auth_recheck_timer_to_now();
     }
 }
 

@@ -133,11 +133,28 @@ impl<'a> AccountWrapper<'a> {
     }
 
     /// Check if the refresh token for this account is still valid
-    pub fn check_authorization_status(&mut self) -> Result<bool> {
-        let mut retrier = NetworkErrorRetrier::new(self.policy);
-        retrier
-            .with_retry(|| self.inner.check_authorization_status())
-            .map(|info| info.active)
+    pub fn check_authorization_status(&mut self) -> AuthStatus {
+        self._check_authorization_status(&mut NetworkErrorRetrier::new(self.policy))
+    }
+
+    fn _check_authorization_status(&mut self, retrier: &mut NetworkErrorRetrier) -> AuthStatus {
+        self.inner.set_auth_recheck_timer_to_now();
+        match retrier.with_retry(|| self.inner.check_authorization_status()) {
+            Ok(v) => {
+                if v.active {
+                    AuthStatus::Valid
+                } else {
+                    AuthStatus::Invalid
+                }
+            }
+            // Missing a refresh/session token means this check failed
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=2084260
+            Err(Error::NoRefreshToken) => AuthStatus::Invalid,
+            // Too many auth checks in a short time, return RefreshTokenInvalid to prevent infinite loops
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=2084267
+            Err(Error::AuthCircuitBreakerError) => AuthStatus::Invalid,
+            Err(_) => AuthStatus::Unknown,
+        }
     }
 
     pub fn get_profile(&mut self) -> Result<()> {
@@ -175,13 +192,13 @@ impl<'a> AccountWrapper<'a> {
                 Error::RemoteError { code: 401, .. } => {
                     // 401 error: clear the access token cache and check the authorization status.
                     self.inner.clear_access_token_cache();
-                    match self.inner.check_authorization_status() {
-                        Ok(status) if status.active => {
-                            // Auth check succeeded, try the operation again.  Maybe we just needed to fetch
-                            // a new access token.
+                    match self._check_authorization_status(&mut retrier) {
+                        AuthStatus::Valid => {
+                            // Auth check succeeded, try the operation again.  Maybe we just needed
+                            // to fetch a new access token.
                             retrier.with_retry(|| op(&mut self.inner))
                         }
-                        _ => Err(e),
+                        AuthStatus::Invalid | AuthStatus::Unknown => Err(e),
                     }
                 }
                 e => Err(e),
@@ -193,13 +210,13 @@ impl<'a> AccountWrapper<'a> {
     pub fn should_recheck_auth(&self) -> bool {
         self.inner.should_recheck_auth()
     }
+}
 
-    /// Set the last time we re-checked our authentication after a failure to the current time.
-    ///
-    /// **💾 This method alters the persisted account state.**
-    pub fn reset_auth_recheck_timer(&mut self) {
-        self.inner.reset_auth_recheck_timer();
-    }
+pub enum AuthStatus {
+    Valid,
+    Invalid,
+    /// The request failed, we don't know if the refresh token is good or bad
+    Unknown,
 }
 
 struct NetworkErrorRetrier {
