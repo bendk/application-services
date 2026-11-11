@@ -9,11 +9,11 @@
 
 use crate::{Error, FxaEvent, FxaState};
 
-use super::helpers::{ResultExt, RetryingAccount, StateMachineErr};
+use super::helpers::{AccountWrapper, ResultExt, StateMachineErr};
 
 /// Transition the FSM from `from` given `event`.
 pub fn transition(
-    account: &mut RetryingAccount<'_>,
+    account: &mut AccountWrapper<'_>,
     from: FxaState,
     event: FxaEvent,
 ) -> std::result::Result<FxaState, StateMachineErr> {
@@ -48,13 +48,13 @@ pub fn transition(
                 // For connected accounts, rerun finish_initialize() since it's possible the
                 // capabilities have changed since the last run -- for example because the user
                 // upgraded Firefox.
-                match account.finish_initialize(&device_config.capabilities) {
-                    Ok(()) => Ok(S::Connected),
-                    Err(cause) => {
+                account
+                    .finish_initialize(&device_config.capabilities)
+                    .to_state_machine_err(|| {
                         account.reset_auth_recheck_timer();
-                        Err(StateMachineErr::new(cause, S::AuthIssues))
-                    }
-                }
+                        S::Connected
+                    })?;
+                Ok(S::Connected)
             }
             state => Ok(state),
         },
@@ -107,7 +107,12 @@ pub fn transition(
                 let dc = account.device_config().clone();
                 account
                     .initialize_device(&dc.name, dc.device_type, &dc.capabilities)
-                    .to_state_machine_err(|| FxaState::Disconnected)?;
+                    // `initialize_device` should almost always succeed, but there's a chance that
+                    // the network goes out after we complete oauth and before we call
+                    // `initialize_device`.  In that case stay in the connected state.
+                    // The worst that can happen is that fxa stores the wrong capabilities for this
+                    // device, which is unlikely and not that bad.
+                    .to_state_machine_err(|| FxaState::Connected)?;
             }
 
             Ok(S::Connected)
@@ -200,6 +205,8 @@ pub fn transition(
         (S::Connected, E::CallGetProfile) => {
             account.get_profile().to_state_machine_err(|| {
                 account.reset_auth_recheck_timer();
+                // This is called from the debug menu for debugging auth issues
+                // If this fails, assume it's because of a bad refresh token.
                 S::AuthIssues
             })?;
             Ok(S::Connected)
@@ -341,7 +348,7 @@ mod tests {
             FxaState::Connected,
         ] {
             let mut account = mock_account();
-            let mut wrapper = RetryingAccount::new(&mut account);
+            let mut wrapper = AccountWrapper::new(&mut account);
             let result = transition(
                 &mut wrapper,
                 authenticating_from(state.clone()),
@@ -367,7 +374,7 @@ mod tests {
     fn invalid_state_event_pair_returns_fatal_invalid_state_transition() {
         nss_as::ensure_initialized();
         let mut account = mock_account();
-        let mut wrapper = RetryingAccount::new(&mut account);
+        let mut wrapper = AccountWrapper::new(&mut account);
         let device_config = DeviceConfig {
             name: "test-device".to_owned(),
             device_type: DeviceType::Mobile,
@@ -385,7 +392,7 @@ mod tests {
     fn uninitialized_disconnect_invalid() {
         nss_as::ensure_initialized();
         let mut account = mock_account();
-        let mut wrapper = RetryingAccount::new(&mut account);
+        let mut wrapper = AccountWrapper::new(&mut account);
         let result = transition(&mut wrapper, FxaState::Uninitialized, FxaEvent::Disconnect);
         assert_fatal_invalid_transition(result);
     }
@@ -396,7 +403,7 @@ mod tests {
         // `Disconnect` should be valid from all states and always result in the user being
         // disconnected.
         let mut account = mock_account();
-        let mut wrapper = RetryingAccount::new(&mut account);
+        let mut wrapper = AccountWrapper::new(&mut account);
 
         assert_eq!(
             transition(&mut wrapper, FxaState::Connected, FxaEvent::Disconnect).unwrap(),
@@ -442,7 +449,7 @@ mod tests {
     fn connected_web_channel_password_change_is_valid_transition() {
         nss_as::ensure_initialized();
         let mut account = mock_account();
-        let mut wrapper = RetryingAccount::new(&mut account);
+        let mut wrapper = AccountWrapper::new(&mut account);
         let result = transition(
             &mut wrapper,
             FxaState::Connected,
@@ -457,7 +464,7 @@ mod tests {
     fn auth_issues_web_channel_password_change_is_valid_transition() {
         nss_as::ensure_initialized();
         let mut account = mock_account();
-        let mut wrapper = RetryingAccount::new(&mut account);
+        let mut wrapper = AccountWrapper::new(&mut account);
         let result = transition(
             &mut wrapper,
             FxaState::AuthIssues,
@@ -472,7 +479,7 @@ mod tests {
     fn authenticating_web_channel_password_change_stays_in_authenticating() {
         nss_as::ensure_initialized();
         let mut account = mock_account();
-        let mut wrapper = RetryingAccount::new(&mut account);
+        let mut wrapper = AccountWrapper::new(&mut account);
         let from = authenticating_from(FxaState::Connected);
         let result = transition(
             &mut wrapper,
