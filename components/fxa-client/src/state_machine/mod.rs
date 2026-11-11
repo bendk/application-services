@@ -41,14 +41,18 @@ impl FirefoxAccount {
                 breadcrumb!("FxaStateMachine.process_event finished (Done({s}))");
                 s
             }
-            Err(StateMachineErr::Handled { cause, target }) => {
-                breadcrumb!("FxaStateMachine.process_event finished (handled -> {target})");
-                let _ = convert_log_report_error(*cause);
-                target
+            Err(StateMachineErr::Handled { cause, new_state }) => {
+                breadcrumb!(
+                    "FxaStateMachine.process_event finished (handled error -> {new_state})"
+                );
+                let _ = convert_log_report_error(cause);
+                new_state
             }
-            Err(StateMachineErr::Fatal(cause)) => {
-                breadcrumb!("FxaStateMachine.process_event finished (fatal — state unchanged)");
-                return Err(*cause);
+            Err(StateMachineErr::Unhandled { cause }) => {
+                breadcrumb!(
+                    "FxaStateMachine.process_event finished (unhandled error — state unchanged)"
+                );
+                return Err(cause);
             }
         };
 

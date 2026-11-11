@@ -15,44 +15,36 @@ use crate::{
 /// avoids inflating every transition's `Result`.
 #[derive(Debug)]
 pub enum StateMachineErr {
-    /// Operational error (network, auth). Driver logs the cause and commits
-    /// `target` as the new public state.
-    Handled { cause: Box<Error>, target: FxaState },
-    /// Programming error. Driver returns `Err(*cause)`; public state unchanged.
-    Fatal(Box<Error>),
+    /// Unhandled error.
+    ///
+    /// If this propagates up to `process_event`, then the state machine will keep the initial
+    /// state.
+    Unhandled { cause: Error },
+    /// Handled error with an explicit state to transition to
+    Handled { cause: Error, new_state: FxaState },
 }
 
-/// Attaches a target [`FxaState`] to a `Result<T, Error>` so transitions can
-/// land somewhere specific on failure with `?`.
-///
-/// Programming errors (logic / invalid-transition) bypass `target` and are
-/// wrapped as [`StateMachineErr::Fatal`] so the driver propagates them.
-///
-/// ```ignore
-/// account.complete_oauth_flow(&code, &state)
-///     .to_state_machine_err(|| initial_state.into())?;
-/// ```
+pub type StateMachineResult<T> = std::result::Result<T, StateMachineErr>;
+
+/// Used to attach methods to `Result<T, StateMachineErr>`
 pub trait ResultExt<T> {
-    fn to_state_machine_err(
-        self,
-        f: impl FnOnce() -> FxaState,
-    ) -> std::result::Result<T, StateMachineErr>;
+    fn handle_err(self, new_state: FxaState) -> Self;
 }
 
-impl<T> ResultExt<T> for Result<T> {
-    fn to_state_machine_err(
-        self,
-        f: impl FnOnce() -> FxaState,
-    ) -> std::result::Result<T, StateMachineErr> {
-        self.map_err(|cause| match cause {
-            Error::StateMachineLogicError(_) | Error::InvalidStateTransition(_) => {
-                StateMachineErr::Fatal(Box::new(cause))
+impl<T> ResultExt<T> for StateMachineResult<T> {
+    fn handle_err(self, new_state: FxaState) -> Self {
+        match self {
+            Err(StateMachineErr::Unhandled { cause }) => {
+                Err(StateMachineErr::Handled { cause, new_state })
             }
-            other => StateMachineErr::Handled {
-                cause: Box::new(other),
-                target: f(),
-            },
-        })
+            _ => self,
+        }
+    }
+}
+
+impl From<Error> for StateMachineErr {
+    fn from(cause: Error) -> Self {
+        Self::Unhandled { cause }
     }
 }
 
@@ -83,11 +75,14 @@ impl<'a> AccountWrapper<'a> {
         }
     }
 
-    pub fn complete_oauth_flow(&mut self, code: &str, state: &str) -> Result<()> {
+    pub fn complete_oauth_flow(&mut self, code: &str, state: &str) -> StateMachineResult<()> {
         self.wrap_operation(|a| a.complete_oauth_flow(code, state))
     }
 
-    pub fn handle_web_channel_password_change(&mut self, json_payload: &str) -> Result<()> {
+    pub fn handle_web_channel_password_change(
+        &mut self,
+        json_payload: &str,
+    ) -> StateMachineResult<()> {
         self.wrap_operation(|a| a.handle_web_channel_password_change(json_payload))
     }
 
@@ -97,7 +92,7 @@ impl<'a> AccountWrapper<'a> {
         service: &str,
         scopes: &[&str],
         entrypoint: &str,
-    ) -> Result<String> {
+    ) -> StateMachineResult<String> {
         self.inner.cancel_existing_oauth_flows();
         self.wrap_operation(|a| a.begin_oauth_flow(service, scopes, entrypoint))
     }
@@ -109,7 +104,7 @@ impl<'a> AccountWrapper<'a> {
         service: &str,
         scopes: &[&str],
         entrypoint: &str,
-    ) -> Result<String> {
+    ) -> StateMachineResult<String> {
         self.inner.cancel_existing_oauth_flows();
         self.wrap_operation(|a| a.begin_pairing_flow(pairing_url, service, scopes, entrypoint))
     }
@@ -120,12 +115,15 @@ impl<'a> AccountWrapper<'a> {
         name: &str,
         device_type: DeviceType,
         capabilities: &[DeviceCapability],
-    ) -> Result<LocalDevice> {
+    ) -> StateMachineResult<LocalDevice> {
         self.wrap_operation(|a| a.initialize_device(name, device_type, capabilities))
     }
 
     /// Finish initializing a connected account
-    pub fn finish_initialize(&mut self, capabilities: &[DeviceCapability]) -> Result<()> {
+    pub fn finish_initialize(
+        &mut self,
+        capabilities: &[DeviceCapability],
+    ) -> StateMachineResult<()> {
         self.wrap_operation(|a| {
             a.ensure_capabilities(capabilities)?;
             Ok(())
@@ -157,7 +155,7 @@ impl<'a> AccountWrapper<'a> {
         }
     }
 
-    pub fn get_profile(&mut self) -> Result<()> {
+    pub fn get_profile(&mut self) -> StateMachineResult<()> {
         self.wrap_operation(|a| {
             a.get_profile(true)?;
             Ok(())
@@ -184,7 +182,7 @@ impl<'a> AccountWrapper<'a> {
     fn wrap_operation<T>(
         &mut self,
         mut op: impl FnMut(&mut FirefoxAccount) -> Result<T>,
-    ) -> Result<T> {
+    ) -> StateMachineResult<T> {
         let mut retrier = NetworkErrorRetrier::new(self.policy);
         retrier
             .with_retry(|| op(&mut self.inner))
@@ -196,12 +194,14 @@ impl<'a> AccountWrapper<'a> {
                         AuthStatus::Valid => {
                             // Auth check succeeded, try the operation again.  Maybe we just needed
                             // to fetch a new access token.
-                            retrier.with_retry(|| op(&mut self.inner))
+                            Ok(retrier.with_retry(|| op(&mut self.inner))?)
                         }
-                        AuthStatus::Invalid | AuthStatus::Unknown => Err(e),
+                        AuthStatus::Invalid | AuthStatus::Unknown => {
+                            Err(StateMachineErr::Unhandled { cause: e })
+                        }
                     }
                 }
-                e => Err(e),
+                e => Err(StateMachineErr::Unhandled { cause: e }),
             })
     }
 
@@ -259,51 +259,6 @@ mod tests {
 
     fn auth_error() -> Error {
         Error::NoRefreshToken
-    }
-
-    #[test]
-    fn to_state_machine_err_attaches_target_state_for_operational_errors() {
-        let res: Result<()> = Err(network_error());
-        let mapped = res.to_state_machine_err(|| FxaState::AuthIssues);
-        match mapped {
-            Err(StateMachineErr::Handled { target, .. }) => {
-                assert_eq!(target, FxaState::AuthIssues)
-            }
-            Err(StateMachineErr::Fatal(_)) => panic!("expected Handled, got Fatal"),
-            Ok(_) => panic!("expected Err"),
-        }
-    }
-
-    #[test]
-    fn to_state_machine_err_promotes_logic_errors_to_fatal() {
-        let res: Result<()> = Err(Error::StateMachineLogicError("boom".into()));
-        let mapped = res.to_state_machine_err(|| FxaState::Disconnected);
-        match mapped {
-            Err(StateMachineErr::Fatal(cause)) => {
-                assert!(matches!(*cause, Error::StateMachineLogicError(_)))
-            }
-            Err(StateMachineErr::Handled { .. }) => panic!("expected Fatal, got Handled"),
-            Ok(_) => panic!("expected Err"),
-        }
-    }
-
-    #[test]
-    fn to_state_machine_err_promotes_invalid_state_transition_to_fatal() {
-        let res: Result<()> = Err(Error::InvalidStateTransition("nope".into()));
-        let mapped = res.to_state_machine_err(|| FxaState::Disconnected);
-        match mapped {
-            Err(StateMachineErr::Fatal(cause)) => {
-                assert!(matches!(*cause, Error::InvalidStateTransition(_)))
-            }
-            _ => panic!("expected Fatal"),
-        }
-    }
-
-    #[test]
-    fn to_state_machine_err_passes_ok_through() {
-        let res: Result<i32> = Ok(42);
-        let mapped = res.to_state_machine_err(|| FxaState::Disconnected);
-        assert_eq!(mapped.unwrap(), 42);
     }
 
     // The retry tests construct a real `FirefoxAccount` because `AccountWrapper`
@@ -370,19 +325,6 @@ mod tests {
         assert_eq!(calls, 1);
     }
 
-    #[test]
-    fn with_retry_propagates_logic_errors_immediately() {
-        nss_as::ensure_initialized();
-        let mut retrier = NetworkErrorRetrier::new(RetryPolicy { network_retries: 3 });
-        let mut calls = 0;
-        let result: Result<i32> = retrier.with_retry(|| {
-            calls += 1;
-            Err(Error::StateMachineLogicError("boom".into()))
-        });
-        assert!(matches!(result, Err(Error::StateMachineLogicError(_))));
-        assert_eq!(calls, 1);
-    }
-
     // The auth-recovery path itself can't be exercised here without a real
     // backend (it calls `check_authorization_status` against the mock); these
     // tests cover the paths that don't trigger recovery.
@@ -417,19 +359,5 @@ mod tests {
         });
         assert_eq!(result.unwrap(), "ok");
         assert_eq!(calls, 2);
-    }
-
-    #[test]
-    fn with_auth_recovery_propagates_logic_errors_immediately() {
-        nss_as::ensure_initialized();
-        let mut account = mock_account();
-        let mut wrapper = AccountWrapper::new(&mut account);
-        let mut calls = 0;
-        let result: Result<i32> = wrapper.wrap_operation(|_| {
-            calls += 1;
-            Err(Error::StateMachineLogicError("boom".into()))
-        });
-        assert!(matches!(result, Err(Error::StateMachineLogicError(_))));
-        assert_eq!(calls, 1);
     }
 }

@@ -2,11 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-//! FxA state machine transition function.
-//!
-//! Each `match` arm reads top-to-bottom as imperative Rust. Use
-//! `.to_state_machine_err(|| target)?` to attach the landing state on failure.
-
 use crate::{Error, FxaEvent, FxaState};
 
 use super::helpers::{AccountWrapper, AuthStatus, ResultExt, StateMachineErr};
@@ -47,9 +42,7 @@ pub fn transition(
                 // For connected accounts, rerun finish_initialize() since it's possible the
                 // capabilities have changed since the last run -- for example because the user
                 // upgraded Firefox.
-                account
-                    .finish_initialize(&device_config.capabilities)
-                    .to_state_machine_err(|| S::Connected)?;
+                account.finish_initialize(&device_config.capabilities)?;
                 Ok(S::Connected)
             }
             state => Ok(state),
@@ -65,9 +58,7 @@ pub fn transition(
             },
         ) => {
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-            let oauth_url = account
-                .begin_oauth_flow(&service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| S::Disconnected)?;
+            let oauth_url = account.begin_oauth_flow(&service, &scope_refs, &entrypoint)?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state: Box::new(S::Disconnected),
@@ -83,9 +74,8 @@ pub fn transition(
             },
         ) => {
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-            let oauth_url = account
-                .begin_pairing_flow(&pairing_url, &service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| S::Disconnected)?;
+            let oauth_url =
+                account.begin_pairing_flow(&pairing_url, &service, &scope_refs, &entrypoint)?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state: Box::new(S::Disconnected),
@@ -96,7 +86,7 @@ pub fn transition(
         (S::Authenticating { initial_state, .. }, E::CompleteOAuthFlow { code, state }) => {
             account
                 .complete_oauth_flow(&code, &state)
-                .to_state_machine_err(|| (*initial_state).clone())?;
+                .handle_err(*initial_state.clone())?;
 
             // Initial state was Connected: device is already initialized, skip the call.
             if !matches!(*initial_state, S::Connected) {
@@ -108,7 +98,7 @@ pub fn transition(
                     // `initialize_device`.  In that case stay in the connected state.
                     // The worst that can happen is that fxa stores the wrong capabilities for this
                     // device, which is unlikely and not that bad.
-                    .to_state_machine_err(|| FxaState::Connected)?;
+                    .handle_err(FxaState::Connected)?;
             }
 
             Ok(S::Connected)
@@ -129,7 +119,7 @@ pub fn transition(
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
             let oauth_url = account
                 .begin_oauth_flow(&service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| (*initial_state).clone())?;
+                .handle_err(*initial_state.clone())?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state,
@@ -147,7 +137,7 @@ pub fn transition(
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
             let oauth_url = account
                 .begin_pairing_flow(&pairing_url, &service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| (*initial_state).clone())?;
+                .handle_err(*initial_state.clone())?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state,
@@ -175,7 +165,7 @@ pub fn transition(
             }
         }
         (S::Connected, E::CallGetProfile) => {
-            account.get_profile().to_state_machine_err(|| {
+            account.get_profile().handle_err({
                 // This is called from the debug menu for debugging auth issues
                 // If this fails, assume it's because of a bad refresh token.
                 S::AuthIssues
@@ -194,9 +184,7 @@ pub fn transition(
             // Lands back at Connected after CompleteOAuthFlow since the device is
             // already initialized.
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-            let oauth_url = account
-                .begin_oauth_flow(&service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| S::Connected)?;
+            let oauth_url = account.begin_oauth_flow(&service, &scope_refs, &entrypoint)?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state: Box::new(FxaState::Connected),
@@ -207,7 +195,7 @@ pub fn transition(
             // the device record (push subscription, commands, etc) against the new token.
             account
                 .handle_web_channel_password_change(&json_payload)
-                .to_state_machine_err(|| S::AuthIssues)?;
+                .handle_err(S::AuthIssues)?;
             Ok(S::Connected)
         }
 
@@ -221,9 +209,7 @@ pub fn transition(
             },
         ) => {
             let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-            let oauth_url = account
-                .begin_oauth_flow(&service, &scope_refs, &entrypoint)
-                .to_state_machine_err(|| S::AuthIssues)?;
+            let oauth_url = account.begin_oauth_flow(&service, &scope_refs, &entrypoint)?;
             Ok(S::Authenticating {
                 oauth_url,
                 initial_state: Box::new(FxaState::AuthIssues),
@@ -236,9 +222,7 @@ pub fn transition(
         (S::AuthIssues, E::WebChannelPasswordChange { json_payload }) => {
             // A concurrent sync/401 may have pushed us here before the webchannel ran. The new
             // session token recovers us; device re-registration will be handled inside the inner call.
-            account
-                .handle_web_channel_password_change(&json_payload)
-                .to_state_machine_err(|| S::AuthIssues)?;
+            account.handle_web_channel_password_change(&json_payload)?;
             Ok(S::Connected)
         }
         (S::AuthIssues, E::CheckAuthorizationStatus) => {
@@ -267,9 +251,9 @@ pub fn transition(
         }
 
         // ── Invalid (state, event) pair ─────────────────────────────────
-        (state, event) => Err(StateMachineErr::Fatal(Box::new(
-            Error::InvalidStateTransition(format!("{state} -> {event}")),
-        ))),
+        (state, event) => Err(StateMachineErr::Unhandled {
+            cause: Error::InvalidStateTransition(format!("{state} -> {event}")),
+        }),
     }
 }
 
@@ -318,11 +302,11 @@ mod tests {
 
     fn assert_fatal_invalid_transition(result: std::result::Result<FxaState, StateMachineErr>) {
         match result {
-            Err(StateMachineErr::Fatal(cause)) => {
-                assert!(matches!(*cause, Error::InvalidStateTransition(_)));
+            Err(StateMachineErr::Unhandled { cause }) => {
+                assert!(matches!(cause, Error::InvalidStateTransition(_)));
             }
             Err(StateMachineErr::Handled { .. }) => {
-                panic!("expected Fatal(InvalidStateTransition), got Handled")
+                panic!("expected Unhandled(InvalidStateTransition), got Handled")
             }
             Ok(s) => panic!("expected InvalidStateTransition, got Ok({s:?})"),
         }
@@ -397,8 +381,12 @@ mod tests {
         expected: FxaState,
     ) {
         match result {
-            Err(StateMachineErr::Handled { target, .. }) => assert_eq!(target, expected),
-            Err(StateMachineErr::Fatal(cause)) => panic!("expected Handled, got Fatal({cause:?})"),
+            Err(StateMachineErr::Handled {
+                new_state: target, ..
+            }) => assert_eq!(target, expected),
+            Err(StateMachineErr::Unhandled { cause }) => {
+                panic!("expected Handled, got Unhandled({cause:?})")
+            }
             Ok(s) => panic!("expected Handled, got Ok({s:?})"),
         }
     }
@@ -411,21 +399,6 @@ mod tests {
         let result = transition(
             &mut wrapper,
             FxaState::Connected,
-            FxaEvent::WebChannelPasswordChange {
-                json_payload: "{}".to_owned(),
-            },
-        );
-        assert_handled_lands_at(result, FxaState::AuthIssues);
-    }
-
-    #[test]
-    fn auth_issues_web_channel_password_change_is_valid_transition() {
-        nss_as::ensure_initialized();
-        let mut account = mock_account();
-        let mut wrapper = AccountWrapper::new(&mut account);
-        let result = transition(
-            &mut wrapper,
-            FxaState::AuthIssues,
             FxaEvent::WebChannelPasswordChange {
                 json_payload: "{}".to_owned(),
             },

@@ -201,9 +201,6 @@ pub enum Error {
 
     #[error("Invalid state transition: {0}")]
     InvalidStateTransition(String),
-
-    #[error("Internal error in the state machine: {0}")]
-    StateMachineLogicError(String),
 }
 
 // Define how our internal errors are handled and converted to external errors
@@ -232,7 +229,7 @@ impl GetErrorHandling for Error {
             }
             Error::BackoffError(_) => ErrorHandling::convert(FxaError::Other(self.to_string()))
                 .report_error("fxa-client-backoff"),
-            Error::InvalidStateTransition(_) | Error::StateMachineLogicError(_) => {
+            Error::InvalidStateTransition(_) => {
                 ErrorHandling::convert(FxaError::Other(self.to_string()))
                     .report_error("fxa-state-machine-error")
             }
