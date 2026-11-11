@@ -30,7 +30,6 @@ impl FirefoxAccount {
         // Must run before transition() — side effects read `device_config`.
         self.handle_state_machine_initialization(&event)?;
 
-        let was_in_auth_issues = matches!(self.auth_state, FxaState::AuthIssues);
         let from_state = self.auth_state.clone();
 
         breadcrumb!("FxaStateMachine.process_event starting: {event}");
@@ -56,12 +55,15 @@ impl FirefoxAccount {
             }
         };
 
-        self.auth_state = new_state.clone();
-        if !was_in_auth_issues && matches!(new_state, FxaState::AuthIssues) {
-            self.on_auth_issues();
-        } else if was_in_auth_issues && !matches!(new_state, FxaState::AuthIssues) {
-            self.on_recovered_from_auth_issues();
+        if new_state != self.auth_state {
+            if let FxaState::AuthIssues { account_deleted } = new_state {
+                self.on_auth_issues(account_deleted);
+            } else if let FxaState::AuthIssues { .. } = &self.auth_state {
+                self.on_recovered_from_auth_issues();
+            }
         }
+
+        self.auth_state = new_state.clone();
         Ok(new_state)
     }
 
@@ -223,12 +225,24 @@ mod driver_tests {
             .unwrap();
         account.auth_state = FxaState::Authenticating {
             oauth_url: "https://example.com/oauth".to_owned(),
-            initial_state: Box::new(FxaState::AuthIssues),
+            initial_state: Box::new(FxaState::AuthIssues {
+                account_deleted: false,
+            }),
         };
 
         let result = account.process_event(FxaEvent::CancelOAuthFlow);
 
-        assert_eq!(result.unwrap(), FxaState::AuthIssues);
-        assert_eq!(account.get_state(), FxaState::AuthIssues);
+        assert_eq!(
+            result.unwrap(),
+            FxaState::AuthIssues {
+                account_deleted: false
+            }
+        );
+        assert_eq!(
+            account.get_state(),
+            FxaState::AuthIssues {
+                account_deleted: false
+            }
+        );
     }
 }

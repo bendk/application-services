@@ -12,14 +12,16 @@ use std::fmt;
 
 impl fmt::Display for FxaState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let name = match self {
-            Self::Uninitialized => "Uninitialized",
-            Self::Disconnected => "Disconnected",
-            Self::Authenticating { .. } => "Authenticating",
-            Self::Connected => "Connected",
-            Self::AuthIssues => "AuthIssues",
-        };
-        write!(f, "{name}")
+        match self {
+            Self::Uninitialized => write!(f, "Uninitialized"),
+            Self::Disconnected => write!(f, "Disconnected"),
+            Self::Authenticating { .. } => write!(f, "Authenticating"),
+            Self::Connected => write!(f, "Connected"),
+            Self::AuthIssues { account_deleted } => f
+                .debug_struct("AuthIssues")
+                .field("account_deleted", account_deleted)
+                .finish(),
+        }
     }
 }
 

@@ -18,7 +18,9 @@ pub fn transition(
     match (from, event) {
         // ── From Uninitialized ──────────────────────────────────────────
         (S::Uninitialized, E::Initialize { device_config }) => match account.get_initial_state() {
-            S::AuthIssues => {
+            S::AuthIssues {
+                account_deleted: false,
+            } => {
                 // This probably indicates that the user is not authorized but there are various
                 // corner cases where we might have gotten something wrong. For example, a bug in an
                 // older browser version that we've since fixed or an FxA server bug.
@@ -32,10 +34,14 @@ pub fn transition(
                             );
                             Ok(S::Connected)
                         }
-                        _ => Ok(S::AuthIssues),
+                        _ => Ok(S::AuthIssues {
+                            account_deleted: false,
+                        }),
                     }
                 } else {
-                    Ok(S::AuthIssues)
+                    Ok(S::AuthIssues {
+                        account_deleted: false,
+                    })
                 }
             }
             S::Connected => {
@@ -158,18 +164,17 @@ pub fn transition(
         (S::Connected, E::CheckAuthorizationStatus) => {
             match account.check_authorization_status() {
                 AuthStatus::Valid => Ok(S::Connected),
-                AuthStatus::Invalid => Ok(S::AuthIssues),
+                AuthStatus::Invalid { account_deleted } => Ok(S::AuthIssues { account_deleted }),
                 // Stay in `Connected` if we didn't receive a definitive result that our
                 // authorization status was bad
                 AuthStatus::Unknown => Ok(S::Connected),
             }
         }
         (S::Connected, E::CallGetProfile) => {
-            account.get_profile().handle_err({
-                // This is called from the debug menu for debugging auth issues
-                // If this fails, assume it's because of a bad refresh token.
-                S::AuthIssues
-            })?;
+            // This is called from the debug menu for debugging auth issues.
+            // Call `AccountWrapper::get_profile` which will often fail because the user forced an
+            // invalid refresh token as part of the debugging.
+            account.get_profile()?;
             Ok(S::Connected)
         }
         (
@@ -195,13 +200,17 @@ pub fn transition(
             // the device record (push subscription, commands, etc) against the new token.
             account
                 .handle_web_channel_password_change(&json_payload)
-                .handle_err(S::AuthIssues)?;
+                .handle_err(S::AuthIssues {
+                    account_deleted: false,
+                })?;
             Ok(S::Connected)
         }
 
         // ── From AuthIssues ─────────────────────────────────────────────
         (
-            S::AuthIssues,
+            S::AuthIssues {
+                account_deleted: false,
+            },
             E::BeginOAuthFlow {
                 service,
                 scopes,
@@ -212,26 +221,40 @@ pub fn transition(
             let oauth_url = account.begin_oauth_flow(&service, &scope_refs, &entrypoint)?;
             Ok(S::Authenticating {
                 oauth_url,
-                initial_state: Box::new(FxaState::AuthIssues),
+                initial_state: Box::new(FxaState::AuthIssues {
+                    account_deleted: false,
+                }),
             })
         }
-        (S::AuthIssues, E::Disconnect) => {
+        // Allow Disconnect even if `account_deleted=false`.  We still want to let users sign out
+        // from that state.
+        (S::AuthIssues { .. }, E::Disconnect) => {
             account.disconnect();
             Ok(S::Disconnected)
         }
-        (S::AuthIssues, E::WebChannelPasswordChange { json_payload }) => {
+        (
+            S::AuthIssues {
+                account_deleted: false,
+            },
+            E::WebChannelPasswordChange { json_payload },
+        ) => {
             // A concurrent sync/401 may have pushed us here before the webchannel ran. The new
             // session token recovers us; device re-registration will be handled inside the inner call.
             account.handle_web_channel_password_change(&json_payload)?;
             Ok(S::Connected)
         }
-        (S::AuthIssues, E::CheckAuthorizationStatus) => {
-            match account.check_authorization_status() {
-                AuthStatus::Valid => Ok(S::Connected),
-                AuthStatus::Invalid => Ok(S::AuthIssues),
-                AuthStatus::Unknown => Ok(S::AuthIssues),
-            }
-        }
+        (
+            S::AuthIssues {
+                account_deleted: false,
+            },
+            E::CheckAuthorizationStatus,
+        ) => match account.check_authorization_status() {
+            AuthStatus::Valid => Ok(S::Connected),
+            AuthStatus::Invalid { account_deleted } => Ok(S::AuthIssues { account_deleted }),
+            AuthStatus::Unknown => Ok(S::AuthIssues {
+                account_deleted: false,
+            }),
+        },
 
         // ── Other transitions  ─────────────────────────────────
         (from_state, E::CheckAuthorizationStatus) => {
@@ -286,7 +309,12 @@ mod tests {
         nss_as::ensure_initialized();
         for state in [
             FxaState::Disconnected,
-            FxaState::AuthIssues,
+            FxaState::AuthIssues {
+                account_deleted: false,
+            },
+            FxaState::AuthIssues {
+                account_deleted: true,
+            },
             FxaState::Connected,
         ] {
             let mut account = mock_account();
@@ -353,7 +381,25 @@ mod tests {
         );
 
         assert_eq!(
-            transition(&mut wrapper, FxaState::AuthIssues, FxaEvent::Disconnect).unwrap(),
+            transition(
+                &mut wrapper,
+                FxaState::AuthIssues {
+                    account_deleted: false
+                },
+                FxaEvent::Disconnect
+            )
+            .unwrap(),
+            FxaState::Disconnected
+        );
+        assert_eq!(
+            transition(
+                &mut wrapper,
+                FxaState::AuthIssues {
+                    account_deleted: true
+                },
+                FxaEvent::Disconnect
+            )
+            .unwrap(),
             FxaState::Disconnected
         );
 
@@ -403,7 +449,12 @@ mod tests {
                 json_payload: "{}".to_owned(),
             },
         );
-        assert_handled_lands_at(result, FxaState::AuthIssues);
+        assert_handled_lands_at(
+            result,
+            FxaState::AuthIssues {
+                account_deleted: false,
+            },
+        );
     }
 
     #[test]

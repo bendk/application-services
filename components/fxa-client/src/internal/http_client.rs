@@ -104,6 +104,7 @@ pub(crate) trait FxAClient {
     ) -> Result<DuplicateTokenResponse>;
     fn destroy_access_token(&self, config: &Config, token: &str) -> Result<()>;
     fn destroy_refresh_token(&self, config: &Config, token: &str) -> Result<()>;
+    fn account_status(&self, config: &Config, uid: &str) -> Result<AccountStatusResponse>;
     fn get_profile(
         &self,
         config: &Config,
@@ -182,6 +183,13 @@ impl FxAClient for Client {
     }
     fn get_openid_configuration(&self, config: &Config) -> Result<OpenIdConfigurationResponse> {
         openid_configuration(config.openid_config_url()?)
+    }
+
+    fn account_status(&self, config: &Config, uid: &str) -> Result<AccountStatusResponse> {
+        let url = config.auth_url_path("v1/account/status")?;
+        let request = Request::get(url).query(&[("uid", uid)]);
+        let resp = self.make_request(request)?;
+        Ok(resp.json()?)
     }
 
     fn get_profile(
@@ -947,6 +955,12 @@ pub struct IntrospectResponse {
     pub active: bool,
     // Technically the response has a lot of other fields,
     // but in practice we only use `active`.
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountStatusResponse {
+    pub exists: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

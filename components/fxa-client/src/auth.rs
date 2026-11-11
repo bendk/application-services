@@ -101,7 +101,9 @@ impl FirefoxAccount {
     /// Call this if you know there's an authentication / authorization issue that requires the
     /// user to re-authenticated.  It transitions the user to the [FxaState.AuthIssues] state.
     pub fn on_auth_issues(&self) {
-        self.internal.lock().on_auth_issues()
+        // Assume the account hasn't been deleted when we get this from the application since the
+        // application code doesn't check for that.
+        self.internal.lock().on_auth_issues(false)
     }
 
     /// Used by the application to test auth token issues
@@ -143,7 +145,7 @@ pub enum FxaState {
     Connected,
     /// User was connected to FxA, but we observed issues with the auth tokens.
     /// The user needs to reauthenticate before the account can be used.
-    AuthIssues,
+    AuthIssues { account_deleted: bool },
 }
 
 #[derive(uniffi::Enum, Clone, Debug, PartialEq, Eq)]

@@ -263,23 +263,29 @@ impl StateManager {
     ///   * `last_auth_check_time`
     ///   * `last_handled_command`
     ///   * `refresh_token`
-    pub fn on_auth_issues(&mut self) {
+    pub fn on_auth_issues(&mut self, account_deleted: bool) {
         self.persisted_state.scoped_keys = HashMap::new();
         self.persisted_state.commands_data = HashMap::new();
         self.persisted_state.access_token_cache = HashMap::new();
         self.persisted_state.server_local_device_info = None;
         self.persisted_state.session_token = None;
         self.persisted_state.logged_out_from_auth_issues = true;
+        // Allow the `account_deleted` param to set `account_deleted`, but not to unset it from a
+        // previous `on_auth_issues` call.
+        self.persisted_state.account_deleted |= account_deleted;
         self.flow_store.clear();
     }
 
     pub fn on_recovered_from_auth_issues(&mut self) {
         self.persisted_state.logged_out_from_auth_issues = false;
+        self.persisted_state.account_deleted = false;
     }
 
     pub fn get_initial_state(&self) -> FxaState {
         if self.persisted_state.logged_out_from_auth_issues {
-            FxaState::AuthIssues
+            FxaState::AuthIssues {
+                account_deleted: self.persisted_state.account_deleted,
+            }
         } else if self.persisted_state.refresh_token.is_some() {
             FxaState::Connected
         } else {

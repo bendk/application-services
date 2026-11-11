@@ -92,6 +92,7 @@ impl FirefoxAccount {
             last_seen_profile: None,
             access_token_cache: HashMap::new(),
             logged_out_from_auth_issues: false,
+            account_deleted: false,
             last_auth_check_time: None,
         })
     }
@@ -256,8 +257,8 @@ impl FirefoxAccount {
     ///
     /// Call this if you know there's an authentication / authorization issue that requires the
     /// user to re-authenticated.  It transitions the user to the [FxaState.AuthIssues] state.
-    pub fn on_auth_issues(&mut self) {
-        self.state.on_auth_issues();
+    pub fn on_auth_issues(&mut self, account_deleted: bool) {
+        self.state.on_auth_issues(account_deleted);
         self.clear_devices_and_attached_clients_cache();
         self.telemetry = FxaTelemetry::new();
     }
@@ -577,8 +578,13 @@ mod tests {
         fxa.state.force_current_device_id("original-device-id");
         assert_eq!(fxa.get_initial_state(), FxaState::Connected);
 
-        fxa.on_auth_issues();
-        assert_eq!(fxa.get_initial_state(), FxaState::AuthIssues);
+        fxa.on_auth_issues(false);
+        assert_eq!(
+            fxa.get_initial_state(),
+            FxaState::AuthIssues {
+                account_deleted: false
+            }
+        );
 
         fxa.state.complete_oauth_flow(
             vec![],

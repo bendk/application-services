@@ -132,6 +132,17 @@ impl FirefoxAccount {
         })
     }
 
+    /// Check whether the user account still exists
+    pub fn is_account_deleted(&mut self) -> Result<bool> {
+        let Some(profile) = self.state.last_seen_profile() else {
+            return Err(Error::NoCachedProfile);
+        };
+        let resp = self
+            .client
+            .account_status(self.state.config(), &profile.response.uid)?;
+        Ok(!resp.exists)
+    }
+
     /// Initiate a pairing flow and return a URL that should be navigated to.
     ///
     /// * `pairing_url` - A pairing URL obtained by scanning a QR code produced by

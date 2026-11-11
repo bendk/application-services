@@ -142,15 +142,31 @@ impl<'a> AccountWrapper<'a> {
                 if v.active {
                     AuthStatus::Valid
                 } else {
-                    AuthStatus::Invalid
+                    AuthStatus::Invalid {
+                        account_deleted: self.is_account_deleted(),
+                    }
                 }
             }
             // Missing a refresh/session token means this check failed
             // https://bugzilla.mozilla.org/show_bug.cgi?id=2084260
-            Err(Error::NoRefreshToken) => AuthStatus::Invalid,
+            Err(Error::NoRefreshToken) => AuthStatus::Invalid {
+                account_deleted: self.is_account_deleted(),
+            },
             // Too many auth checks in a short time, return RefreshTokenInvalid to prevent infinite loops
             // https://bugzilla.mozilla.org/show_bug.cgi?id=2084267
-            Err(Error::AuthCircuitBreakerError) => AuthStatus::Invalid,
+            Err(Error::AuthCircuitBreakerError) => AuthStatus::Invalid {
+                account_deleted: self.is_account_deleted(),
+            },
+            Err(Error::NoScopedKey(_)) => {
+                // What should we do if we're missing the scoped key?
+                // This is a weird error, because we should have been able to use a token exchange
+                // to get the scope we need. The old code moved to the `AuthIssues` state here,
+                // let's try to match thatbehavior
+                // let's continue to do that.
+                AuthStatus::Invalid {
+                    account_deleted: self.is_account_deleted(),
+                }
+            }
             Err(_) => AuthStatus::Unknown,
         }
     }
@@ -160,6 +176,11 @@ impl<'a> AccountWrapper<'a> {
             a.get_profile(true)?;
             Ok(())
         })
+    }
+
+    fn is_account_deleted(&mut self) -> bool {
+        // Call `is_account_deleted` and assume the account still exists on errors
+        self.inner.is_account_deleted().unwrap_or(false)
     }
 
     pub fn get_initial_state(&mut self) -> FxaState {
@@ -196,9 +217,11 @@ impl<'a> AccountWrapper<'a> {
                             // to fetch a new access token.
                             Ok(retrier.with_retry(|| op(&mut self.inner))?)
                         }
-                        AuthStatus::Invalid | AuthStatus::Unknown => {
-                            Err(StateMachineErr::Unhandled { cause: e })
-                        }
+                        AuthStatus::Invalid { account_deleted } => Err(StateMachineErr::Handled {
+                            cause: e,
+                            new_state: FxaState::AuthIssues { account_deleted },
+                        }),
+                        AuthStatus::Unknown => Err(StateMachineErr::Unhandled { cause: e }),
                     }
                 }
                 e => Err(StateMachineErr::Unhandled { cause: e }),
@@ -214,7 +237,9 @@ impl<'a> AccountWrapper<'a> {
 
 pub enum AuthStatus {
     Valid,
-    Invalid,
+    Invalid {
+        account_deleted: bool,
+    },
     /// The request failed, we don't know if the refresh token is good or bad
     Unknown,
 }

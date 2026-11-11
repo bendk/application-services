@@ -201,6 +201,9 @@ pub enum Error {
 
     #[error("Invalid state transition: {0}")]
     InvalidStateTransition(String),
+
+    #[error("No cached profile")]
+    NoCachedProfile,
 }
 
 // Define how our internal errors are handled and converted to external errors

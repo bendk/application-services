@@ -110,6 +110,8 @@ pub(crate) struct StateV2 {
     pub(crate) server_local_device_info: Option<LocalDevice>,
     #[serde(default)]
     pub(crate) logged_out_from_auth_issues: bool,
+    #[serde(default)]
+    pub(crate) account_deleted: bool,
     pub(crate) last_auth_check_time: Option<u64>,
 }
 
