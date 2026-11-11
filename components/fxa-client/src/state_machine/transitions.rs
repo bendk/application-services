@@ -46,13 +46,13 @@ pub fn transition(
                 }
             }
             FxaRustAuthState::Connected => {
-                match account.finish_initialize(&device_config.capabilities) {
-                    Ok(()) => Ok(S::Connected),
-                    Err(cause) => {
+                account
+                    .finish_initialize(&device_config.capabilities)
+                    .to_state_machine_err(|| {
                         account.reset_auth_recheck_timer();
-                        Err(StateMachineErr::new(cause, S::AuthIssues))
-                    }
-                }
+                        S::Connected
+                    })?;
+                Ok(S::Connected)
             }
         },
 
@@ -104,7 +104,12 @@ pub fn transition(
                 let dc = account.device_config().clone();
                 account
                     .initialize_device(&dc.name, dc.device_type, &dc.capabilities)
-                    .to_state_machine_err(|| FxaState::Disconnected)?;
+                    // `initialize_device` should almost always succeed, but there's a chance that
+                    // the network goes out after we complete oauth and before we call
+                    // `initialize_device`.  In that case stay in the connected state.
+                    // The worst that can happen is that fxa stores the wrong capabilities for this
+                    // device, which is unlikely and not that bad.
+                    .to_state_machine_err(|| FxaState::Connected)?;
             }
 
             Ok(S::Connected)
@@ -197,6 +202,8 @@ pub fn transition(
         (S::Connected, E::CallGetProfile) => {
             account.get_profile().to_state_machine_err(|| {
                 account.reset_auth_recheck_timer();
+                // This is called from the debug menu for debugging auth issues
+                // If this fails, assume it's because of a bad refresh token.
                 S::AuthIssues
             })?;
             Ok(S::Connected)
