@@ -73,9 +73,8 @@ impl FirefoxAccount {
     /// Applications may call this method to check with the FxA server about the status
     /// of their authentication tokens. It returns an [`AuthorizationInfo`] struct
     /// with details about whether the tokens are still active.
-    #[handle_error(Error)]
-    pub fn check_authorization_status(&self) -> ApiResult<AuthorizationInfo> {
-        Ok(self.internal.lock().check_authorization_status()?.into())
+    pub fn check_authorization_status(&self) -> AuthorizationStatus {
+        self.internal.lock().check_authorization_status()
     }
 
     /// Disconnect from the user's account.
@@ -115,13 +114,13 @@ impl FirefoxAccount {
     }
 }
 
-#[derive(uniffi::Record)]
-/// Information about the authorization state of the application.
-///
-/// This struct represents metadata about whether the application is currently
-/// connected to the user's account.
-pub struct AuthorizationInfo {
-    pub active: bool,
+#[derive(uniffi::Enum, PartialEq, Eq, Debug)]
+/// Result of the `check_authorization_status()` method.
+pub enum AuthorizationStatus {
+    Valid,
+    Invalid,
+    /// The request failed, we don't know if the refresh token is good or bad
+    Unknown,
 }
 
 #[derive(uniffi::Enum, Clone, Debug, PartialEq, Eq)]
