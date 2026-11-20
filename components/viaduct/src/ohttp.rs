@@ -361,9 +361,8 @@ pub async fn process_ohttp_request(
             String::from_utf8_lossy(&relay_response.body)
         );
         return Err(ViaductError::OhttpRequestError(format!(
-            "OHTTP relay returned error: HTTP {} - {}",
+            "OHTTP relay returned error: HTTP {}",
             relay_response.status,
-            String::from_utf8_lossy(&relay_response.body)
         )));
     }
 

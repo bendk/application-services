@@ -222,6 +222,7 @@ impl GetErrorHandling for Error {
             Error::RemoteError { code: 403, .. } => {
                 ErrorHandling::convert(FxaError::Forbidden).log_warning()
             }
+            // Viaduct reports errors/failures internally, so we just need to log a warning here.
             Error::RequestError(_) => ErrorHandling::convert(FxaError::Network).log_warning(),
             Error::SyncScopedKeyMissingInServerResponse => {
                 ErrorHandling::convert(FxaError::SyncScopedKeyMissingInServerResponse)

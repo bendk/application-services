@@ -9,13 +9,20 @@ pub enum ViaductError {
     #[error("[no-sentry] Illegal characters in request header '{0}'")]
     RequestHeaderError(String),
 
-    #[error("[no-sentry] Backend error: {0}")]
-    BackendError(String),
-
     #[error("[no-sentry] Network error: {0}")]
     NetworkError(String),
 
-    #[error("The rust-components network backend only be initialized once!")]
+    #[error("[no-sentry] Network timeout error")]
+    NetworkTimeoutError,
+
+    /// Unknown backend error
+    ///
+    /// If possible, return specific errors like `NetworkError` or `NetworkTimeoutError` rather than
+    /// this.
+    #[error("[no-sentry] Backend error: {0}")]
+    BackendError(String),
+
+    #[error("The rust-components network backend must only be initialized once!")]
     BackendAlreadyInitialized,
 
     #[error("The rust-components network backend must be initialized before use!")]

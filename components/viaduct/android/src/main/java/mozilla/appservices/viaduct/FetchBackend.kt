@@ -6,6 +6,8 @@ package mozilla.appservices.viaduct
 
 import mozilla.components.concept.fetch.Headers.Names.CONTENT_LENGTH
 import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import mozilla.components.concept.fetch.Client as FetchClient
 import mozilla.components.concept.fetch.Header as FetchHeader
@@ -55,7 +57,23 @@ internal class FetchBackend(val client: Lazy<FetchClient>) : Backend {
             cookiePolicy = FetchRequest.CookiePolicy.OMIT,
             useCaches = true,
         )
-        val fetchResp = client.value.fetch(fetchReq)
+        val fetchResp = try {
+            client.value.fetch(fetchReq)
+        } catch (e: SocketTimeoutException) {
+            throw ViaductException.NetworkTimeoutException()
+        } catch (e: IOException) {
+            // This is thrown for a WebRequestError
+            // This may or may not be a timeout error -- the docs say code 0x33 is a timeout error.
+            // https://searchfox.org/firefox-main/rev/437dd728fb23a22854b4025f0596a17b25ffcb58/mobile/android/geckoview/src/main/java/org/mozilla/geckoview/WebRequestError.java#118
+            //
+            // We don't want to add a dependency on GeckoView to inspect the WebRequestError data directly, so just search the string.
+            val message = e.message ?: "Unknown error"
+            if (message.contains("error=0x33,")) {
+                throw ViaductException.NetworkTimeoutException()
+            } else {
+                throw ViaductException.NetworkException(message)
+            }
+        }
         return Response(
             requestMethod = request.method,
             url = fetchResp.url,

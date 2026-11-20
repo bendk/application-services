@@ -635,6 +635,7 @@ pub trait ApiClient {
 
 /// Client for Remote settings API requests
 pub struct ViaductApiClient {
+    client: viaduct::Client,
     endpoints: RemoteSettingsEndpoints,
     remote_state: RemoteState,
 }
@@ -642,6 +643,9 @@ pub struct ViaductApiClient {
 impl ViaductApiClient {
     fn new(base_url: BaseUrl, bucket_name: &str, collection_name: &str) -> Self {
         Self {
+            client: viaduct::ClientBuilder::default()
+                .with_error_reporting("remote-settings")
+                .finish(),
             endpoints: RemoteSettingsEndpoints::new(&base_url, bucket_name, collection_name),
             remote_state: RemoteState::default(),
         }
@@ -656,7 +660,7 @@ impl ViaductApiClient {
         self.remote_state.ensure_no_backoff()?;
 
         let req = Request::get(url);
-        let resp = req.send()?;
+        let resp = self.client.send_sync(req)?;
 
         self.remote_state.handle_backoff_hint(&resp)?;
 

@@ -170,6 +170,7 @@ enum HttpClientState {
 }
 
 pub struct Client {
+    viaduct_client: viaduct::Client,
     state: Mutex<HashMap<String, HttpClientState>>,
     simulate_network_error: AtomicBool,
 }
@@ -480,11 +481,17 @@ impl FxAClient for Client {
 
 macro_rules! fetch {
     ($url:expr) => {
-        viaduct::Request::get($url)
-            .send()?
+        build_client()
+            .send_sync(viaduct::Request::get($url))?
             .require_success()?
             .json()?
     };
+}
+
+fn build_client() -> viaduct::Client {
+    viaduct::ClientBuilder::default()
+        .with_error_reporting("fxa-client")
+        .finish()
 }
 
 #[inline]
@@ -499,6 +506,7 @@ pub(crate) fn openid_configuration(url: Url) -> Result<OpenIdConfigurationRespon
 impl Client {
     pub fn new() -> Self {
         Self {
+            viaduct_client: build_client(),
             state: Mutex::new(HashMap::new()),
             simulate_network_error: AtomicBool::new(false),
         }
@@ -590,7 +598,7 @@ impl Client {
         }
         self.state.lock().insert(url, HttpClientState::Ok);
         trace!("Making request: {request:?}");
-        let resp = request.send()?;
+        let resp = self.viaduct_client.send_sync(request)?;
         trace!("Response: {resp:?}");
         if resp.is_success() || resp.status == status_codes::NOT_MODIFIED {
             Ok(resp)

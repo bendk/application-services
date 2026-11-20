@@ -12,7 +12,7 @@ use error_support::trace;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use url::Url;
-use viaduct::{Client, ClientSettings, Request};
+use viaduct::{ClientBuilder, Request};
 
 use crate::{
     client::RemoteState, config::BaseUrl, error::Error, storage::Storage,
@@ -88,7 +88,9 @@ impl RemoteSettingsService {
                 },
             }),
             sync_client: Mutex::new(SyncClient {
-                client: Client::new(ClientSettings::default()),
+                client: ClientBuilder::default()
+                    .with_error_reporting("remote-settings")
+                    .finish(),
                 remote_state: RemoteState::default(),
             }),
             telemetry: Mutex::new(RemoteSettingsTelemetryWrapper::default()),

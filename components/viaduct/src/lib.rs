@@ -28,7 +28,7 @@ pub use error::*;
 pub use error_support::{debug, error, info, trace, warn};
 
 pub use backend::{init_backend, Backend};
-pub use client::{Client, ClientSettings};
+pub use client::{Client, ClientBuilder, ClientSettings};
 pub use headers::{consts as header_names, Header, HeaderName, Headers, InvalidHeaderName};
 #[cfg(feature = "ohttp")]
 pub use ohttp::{clear_ohttp_channels, configure_ohttp_channel, list_ohttp_channels, OhttpConfig};
